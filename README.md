@@ -52,13 +52,36 @@ npm run import
 
 Connect to Postgres as `postgres` (the database owner). The import turns off the forum triggers on `forum_threads`, `forum_posts` and `forum_post_likes` while it runs, then recounts what they would have kept.
 
-### On the VPS test environment
+### On the VPS
+
+Run it from the VPS terminal (as root, over SSH or in Coolify's server terminal). Both databases run there, so no tunnel is needed. There's no web page: you start it with a command, watch the progress lines, and open the HTML report afterwards.
+
+The server doesn't need Node installed. A throwaway Node container runs it:
+
+```sh
+git clone https://github.com/joeseos/yaktribe-import.git && cd yaktribe-import
+cp .env.example .env              # then fill in both database URLs
+cp mapping.example.csv mapping.csv
+tmux new -s import                # keeps the import running if SSH drops; reattach with: tmux attach -t import
+docker run --rm -it --network host -v "$PWD":/app -w /app node:22 \
+  sh -c "npm ci && npm run import -- --dry-run"
+```
+
+Run the same `docker run` without `--dry-run` for the real import. To update the tool later, run `git pull`.
+
+`--network host` lets the container reach the databases on the server's `localhost` ports, so `.env` uses `localhost` and the ports the MariaDB and Supabase Postgres containers publish.
+
+The report lands in `reports/` on the server. To open it, copy it to your computer:
+
+```sh
+scp root@<vps>:yaktribe-import/reports/import-*.html .
+```
 
 1. Load the YakTribe dump into the MariaDB container.
-2. Open SSH tunnels to MariaDB and to the test Supabase Postgres, or run the tool on the server.
-3. Set `XF_DATABASE_URL` and `MM_DATABASE_URL` in `.env`, and do a dry run first.
+2. Do a dry run against the test Supabase, read the report, and fix the mapping until it looks right.
+3. Do the real import into the test Supabase and check the forum in the test app.
 
-Never point a test run at production.
+Never point a test run at production. For the production import, it's the same command with `MM_DATABASE_URL` set to production's direct Postgres connection.
 
 ## Before a production import
 
