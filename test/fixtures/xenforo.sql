@@ -76,12 +76,14 @@ CREATE TABLE xf_phrase (
   phrase_text mediumtext NOT NULL
 ) CHARSET utf8mb4;
 
--- Kal's email matches a confirmed Munda Manager account (in another case), Zed's an unconfirmed one
+-- Kal's email matches a confirmed Munda Manager account (in another case), Zed's an unconfirmed one.
+-- Mira has an account too but is only mentioned, never posts or likes.
 INSERT INTO xf_user VALUES
   (1, 'Admin', 'admin@yak.test'),
   (2, 'Bob', 'bob@yak.test'),
   (45, 'Kal', 'KAL@Example.com'),
-  (46, 'Zed', 'zed@example.com');
+  (46, 'Zed', 'zed@example.com'),
+  (47, 'Mira', 'mira@example.com');
 
 INSERT INTO xf_node VALUES
   (1, 'Necromunda', 'Category', 0),
@@ -105,11 +107,11 @@ INSERT INTO xf_post VALUES
     'visible', 1, 1600000900),
   (12, 7, 46, 'Zed', 1600000600, 'Waiting for approval', 'moderated', 2, 0),
   (20, 8, 45, 'Kal', 1600100000, '[LIST]\n[*]Territories\n[*]Skills\n[/LIST]', 'visible', 0, 0),
-  (21, 8, 1, 'Admin', 1600100100, 'Like this report: https://yaktribe.games/community/posts/11/', 'visible', 1, 0),
+  (21, 8, 1, 'Admin', 1600100100, 'Like this report: https://yaktribe.games/community/posts/11/ cc [USER=47]@Mira[/USER]', 'visible', 1, 0),
   (30, 12, 2, 'Bob', 1600500000, 'Deleted', 'deleted', 0, 0),
   (40, 13, 0, 'Visitor', 1600600000, 'Posted as a guest', 'visible', 0, 0),
   (41, 13, 99, 'Gone', 1600600100, 'My account was deleted', 'visible', 1, 0),
-  (42, 13, 2, 'Bob', 1600600200, CONCAT('[B]Big[/B] ', REPEAT('[i]word[/i] ', 6000)), 'visible', 2, 0),
+  (42, 13, 2, 'Bob', 1600600200, CONCAT('[B]Big[/B] ', REPEAT('[i]word[/i] ', 12000)), 'visible', 2, 0),
   (50, 11, 2, 'Bob', 1600400000, 'Not imported', 'visible', 0, 0);
 
 INSERT INTO xf_reaction_content (reaction_id, content_type, content_id, reaction_user_id, reaction_date, content_user_id) VALUES

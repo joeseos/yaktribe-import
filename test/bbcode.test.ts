@@ -90,6 +90,11 @@ test('unknown and unbalanced tags stay as text', () => {
   assert.equal(stats.unknownTags.foo, 1);
 });
 
+test('an unclosed raw tag stays as text', () => {
+  assert.equal(html('Wrap it in [img] tags, then [b]bold[/b]'), '<p>Wrap it in [img] tags, then <strong>bold</strong></p>');
+  assert.equal(html('İ [ICODE]x[/icode] y'), '<p>İ <code>x</code> y</p>');
+});
+
 test('collectRefs finds quoted posts, mentions and YakTribe links', () => {
   const refs = collectRefs(
     parse('[quote="A, post: 10"]x[/quote][user=45]@K[/user] https://yaktribe.games/community/posts/99/ [url=https://yaktribe.games/community/threads/x.7/]t[/url]', emptyStats()),

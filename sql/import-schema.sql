@@ -21,10 +21,23 @@ CREATE POLICY "Anyone can read imported authors" ON public.forum_imported_author
 
 GRANT SELECT ON public.forum_imported_authors TO anon, authenticated;
 
-ALTER TABLE public.forum_threads
-  ADD COLUMN IF NOT EXISTS imported_author_id uuid REFERENCES public.forum_imported_authors(id) ON DELETE SET NULL;
-ALTER TABLE public.forum_posts
-  ADD COLUMN IF NOT EXISTS imported_author_id uuid REFERENCES public.forum_imported_authors(id) ON DELETE SET NULL;
+-- Checked first because ALTER TABLE locks the forum against reads even when the column exists
+DO $$
+DECLARE
+  forum_table text;
+BEGIN
+  FOREACH forum_table IN ARRAY ARRAY['forum_threads', 'forum_posts'] LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = forum_table AND column_name = 'imported_author_id'
+    ) THEN
+      EXECUTE format(
+        'ALTER TABLE public.%I ADD COLUMN imported_author_id uuid REFERENCES public.forum_imported_authors(id) ON DELETE SET NULL',
+        forum_table
+      );
+    END IF;
+  END LOOP;
+END $$;
 
 CREATE SCHEMA IF NOT EXISTS yaktribe;
 REVOKE ALL ON SCHEMA yaktribe FROM PUBLIC;
@@ -50,7 +63,8 @@ CREATE TABLE IF NOT EXISTS yaktribe.post_map (
   post_number integer NOT NULL
 );
 
--- Likes by people who haven't claimed their posts yet; they become forum_post_likes rows on claim
+-- Likes by people who haven't claimed their posts yet; they become forum_post_likes rows on claim.
+-- forum_posts.like_count already counts them, so the claim must not let the like trigger count them again.
 CREATE TABLE IF NOT EXISTS yaktribe.pending_likes (
   post_id uuid NOT NULL REFERENCES public.forum_posts(id) ON DELETE CASCADE,
   author_id uuid NOT NULL REFERENCES public.forum_imported_authors(id) ON DELETE CASCADE,

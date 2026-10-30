@@ -53,16 +53,18 @@ async function main() {
   const report = new Report();
   report.dryRun = values['dry-run'];
 
-  const xf = await mysql.createConnection({ uri: env('XF_DATABASE_URL'), charset: 'utf8mb4' });
+  const xfUrl = env('XF_DATABASE_URL');
   const mm = new pg.Client({ connectionString: env('MM_DATABASE_URL') });
-  await mm.connect();
+  let xf: mysql.Connection | null = null;
   try {
+    xf = await mysql.createConnection({ uri: xfUrl, charset: 'utf8mb4' });
+    await mm.connect();
     await new Importer(xf, mm, mapping, report, options).run(report.dryRun);
   } catch (error) {
     report.error = error instanceof Error ? error.message : String(error);
   } finally {
     report.finishedAt = new Date();
-    await Promise.allSettled([xf.end(), mm.end()]);
+    await Promise.allSettled([xf?.end(), mm.end()]);
   }
 
   const files = report.write(process.env.REPORT_DIR || 'reports');

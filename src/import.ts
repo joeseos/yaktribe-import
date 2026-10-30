@@ -21,6 +21,9 @@ const POSTS_PER_PAGE = 20;
 const MAX_CONTENT = 50_000;
 const MAX_TITLE = 150;
 const LIKE_REACTION_ID = 1;
+const MAX_TAGS = 3;
+// Posts per insert: thread batches can hold megathreads, so posts are paged on their own
+const POST_BATCH = 2000;
 // Tables whose forum triggers would overwrite dates, numbers and counters, or rate-limit the import
 const TRIGGER_TABLES = ['forum_threads', 'forum_posts', 'forum_post_likes'];
 
@@ -101,6 +104,8 @@ export class Importer {
   private readonly threads = new Map<number, ThreadInfo>();
   private readonly authors = new Map<number, Author>();
   private readonly guests = new Map<string, string>();
+  /** Profiles of mentioned users who neither posted nor liked in the imported threads */
+  private readonly mentioned = new Map<number, string | null>();
 
   constructor(xf: Connection, pg: Client, mapping: Mapping, report: Report, options: ImportOptions) {
     this.xf = xf;
@@ -197,6 +202,16 @@ export class Importer {
   }
 
   private async removePreviousImport() {
+    const { rows: [{ count: newPosts }] } = await this.pg.query<{ count: string }>(
+      `SELECT count(*) FROM forum_posts p JOIN yaktribe.thread_map m ON m.thread_id = p.thread_id
+       WHERE p.id NOT IN (SELECT post_id FROM yaktribe.post_map)`,
+    );
+    if (Number(newPosts)) {
+      throw new Error(
+        `Replies written in Munda Manager since the last import (${newPosts}) are in imported threads. ` +
+          'Running the import again would delete them, so it stopped.',
+      );
+    }
     const { rowCount } = await this.pg.query('DELETE FROM forum_threads WHERE id IN (SELECT thread_id FROM yaktribe.thread_map)');
     await this.pg.query('TRUNCATE yaktribe.post_map');
     await this.pg.query('DELETE FROM forum_imported_authors');
@@ -344,16 +359,9 @@ export class Importer {
       step.read += users.length;
       skip(step, 'account deleted on YakTribe (posts keep the name they were written under)', ids.length - users.length);
 
-      const emails = users.map((user) => user.email.trim().toLowerCase()).filter(Boolean);
-      const { rows: accounts } = await this.pg.query<{ id: string; email: string }>(
-        `SELECT u.id, lower(u.email) AS email FROM auth.users u JOIN profiles p ON p.id = u.id
-         WHERE u.email_confirmed_at IS NOT NULL AND lower(u.email) = ANY($1)`,
-        [emails],
-      );
-      const profileByEmail = new Map(accounts.map((account) => [account.email, account.id]));
-
+      const profiles = await this.matchProfiles(users);
       const rows = users.map((user) => {
-        const profileId = profileByEmail.get(user.email.trim().toLowerCase()) ?? null;
+        const profileId = profiles.get(user.user_id) ?? null;
         if (profileId) matched++;
         const author = { id: randomUUID(), profileId };
         this.authors.set(user.user_id, author);
@@ -379,6 +387,18 @@ export class Importer {
     );
   }
 
+  /** Munda Manager profiles by XenForo user id, for users whose email matches a confirmed account. */
+  private async matchProfiles(users: { user_id: number; email: string }[]): Promise<Map<number, string>> {
+    const email = (user: { email: string }) => user.email.trim().toLowerCase();
+    const { rows } = await this.pg.query<{ id: string; email: string }>(
+      `SELECT u.id, lower(u.email) AS email FROM auth.users u JOIN profiles p ON p.id = u.id
+       WHERE u.email_confirmed_at IS NOT NULL AND lower(u.email) = ANY($1)`,
+      [users.map(email).filter(Boolean)],
+    );
+    const byEmail = new Map(rows.map((row) => [row.email, row.id]));
+    return new Map(users.flatMap((user) => (byEmail.has(email(user)) ? [[user.user_id, byEmail.get(email(user))!]] : [])));
+  }
+
   /** A post by a guest or a deleted account: an author with the name it was posted under. */
   private async guestAuthor(username: string): Promise<string> {
     const name = username.trim() || 'Guest';
@@ -401,11 +421,21 @@ export class Importer {
       [[...refs.postIds]],
     );
     const postHrefs = new Map(posts.map((post) => [post.xf_post_id, postHref(post.path, post.post_number)]));
+
+    const unknown = [...refs.userIds].filter((id) => !this.authors.has(id) && !this.mentioned.has(id));
+    if (unknown.length) {
+      const users = await this.xfRows<{ user_id: number; email: string }>(
+        `SELECT user_id, email FROM ${this.t('user')} WHERE user_id IN (?)`,
+        [unknown],
+      );
+      const profiles = await this.matchProfiles(users);
+      for (const id of unknown) this.mentioned.set(id, profiles.get(id) ?? null);
+    }
     return {
       postHref: (id) => postHrefs.get(id) ?? null,
       threadHref: (id) => this.threads.get(id)?.path ?? null,
       mention: (id) => {
-        const profileId = this.authors.get(id)?.profileId;
+        const profileId = this.authors.has(id) ? this.authors.get(id)!.profileId : this.mentioned.get(id);
         return profileId ? { profileId } : null;
       },
     };
@@ -416,45 +446,49 @@ export class Importer {
     const { rows: [{ count }] } = await this.pg.query<{ count: string }>('SELECT count(*) FROM yaktribe.post_map');
     const progress = new Progress('Posts', Number(count));
     for (const threadIds of this.threadChunks()) {
-      const posts = await this.xfRows<{
-        post_id: number; thread_id: number; user_id: number; username: string; post_date: number; message: string; last_edit_date: number;
-      }>(
-        `SELECT post_id, thread_id, user_id, username, post_date, message, last_edit_date FROM ${this.t('post')}
-         WHERE thread_id IN (?) AND message_state = 'visible'`,
-        [threadIds],
-      );
-      step.read += posts.length;
-      const { rows: mapped } = await this.pg.query<{ xf_post_id: number; post_id: string; post_number: number }>(
-        'SELECT xf_post_id, post_id, post_number FROM yaktribe.post_map WHERE xf_post_id = ANY($1)',
-        [posts.map((post) => post.post_id)],
-      );
-      const numbers = new Map(mapped.map((row) => [row.xf_post_id, row]));
+      for (let lastId = 0; ; ) {
+        const posts = await this.xfRows<{
+          post_id: number; thread_id: number; user_id: number; username: string; post_date: number; message: string; last_edit_date: number;
+        }>(
+          `SELECT post_id, thread_id, user_id, username, post_date, message, last_edit_date FROM ${this.t('post')}
+           WHERE thread_id IN (?) AND message_state = 'visible' AND post_id > ? ORDER BY post_id LIMIT ?`,
+          [threadIds, lastId, POST_BATCH],
+        );
+        if (!posts.length) break;
+        lastId = posts[posts.length - 1].post_id;
+        step.read += posts.length;
+        const { rows: mapped } = await this.pg.query<{ xf_post_id: number; post_id: string; post_number: number }>(
+          'SELECT xf_post_id, post_id, post_number FROM yaktribe.post_map WHERE xf_post_id = ANY($1)',
+          [posts.map((post) => post.post_id)],
+        );
+        const numbers = new Map(mapped.map((row) => [row.xf_post_id, row]));
 
-      const parsed = posts.map((post) => parse(post.message, this.report.conversion));
-      const resolver = await this.resolverFor(parsed);
-      const rows: unknown[][] = [];
-      for (const [i, post] of posts.entries()) {
-        const target = numbers.get(post.post_id)!;
-        const author = post.user_id > 0 ? this.authors.get(post.user_id) : undefined;
-        const importedAuthorId = author?.id ?? (await this.guestAuthor(post.username));
-        let content = render(parsed[i], resolver, this.report.conversion);
-        if (content.length > MAX_CONTENT) {
-          this.report.truncatedPosts.push(post.post_id);
-          content = truncated(post.message);
+        const parsed = posts.map((post) => parse(post.message, this.report.conversion));
+        const resolver = await this.resolverFor(parsed);
+        const rows: unknown[][] = [];
+        for (const [i, post] of posts.entries()) {
+          const target = numbers.get(post.post_id)!;
+          const author = post.user_id > 0 ? this.authors.get(post.user_id) : undefined;
+          const importedAuthorId = author?.id ?? (await this.guestAuthor(post.username));
+          let content = render(parsed[i], resolver, this.report.conversion);
+          if (content.length > MAX_CONTENT) {
+            this.report.truncatedPosts.push(post.post_id);
+            content = truncated(post.message);
+          }
+          rows.push([
+            target.post_id, this.threads.get(post.thread_id)!.id, target.post_number, author?.profileId ?? null, importedAuthorId,
+            content, fromUnix(post.post_date), post.last_edit_date > 0 ? fromUnix(post.last_edit_date) : null,
+          ]);
         }
-        rows.push([
-          target.post_id, this.threads.get(post.thread_id)!.id, target.post_number, author?.profileId ?? null, importedAuthorId,
-          content, fromUnix(post.post_date), post.last_edit_date > 0 ? fromUnix(post.last_edit_date) : null,
-        ]);
+        step.written += await insertRows(
+          this.pg,
+          'forum_posts',
+          [['id', 'uuid'], ['thread_id', 'uuid'], ['post_number', 'integer'], ['author_id', 'uuid'], ['imported_author_id', 'uuid'],
+            ['content', 'text'], ['created_at', 'timestamptz'], ['updated_at', 'timestamptz']],
+          rows,
+        );
+        progress.tick(posts.length);
       }
-      step.written += await insertRows(
-        this.pg,
-        'forum_posts',
-        [['id', 'uuid'], ['thread_id', 'uuid'], ['post_number', 'integer'], ['author_id', 'uuid'], ['imported_author_id', 'uuid'],
-          ['content', 'text'], ['created_at', 'timestamptz'], ['updated_at', 'timestamptz']],
-        rows,
-      );
-      progress.tick(posts.length);
     }
     progress.finish();
   }
@@ -529,20 +563,19 @@ export class Importer {
       ).map((prefix) => [prefix.prefix_id, prefix.title ?? `prefix ${prefix.prefix_id}`]),
     );
 
-    const threadTags: [threadId: string, tag: string][] = [];
-    const add = (threadId: string, tags: string[]) => tags.forEach((tag) => threadTags.push([threadId, tag]));
+    // Per thread in order of priority: the forum's tags, then the prefix's, then XenForo tags
+    const tagsByThread = new Map<string, Set<string>>();
+    const add = (threadId: string, tags: string[]) => {
+      const set = tagsByThread.get(threadId) ?? new Set();
+      for (const tag of tags) set.add(tag);
+      tagsByThread.set(threadId, set);
+    };
     for (const threadIds of this.threadChunks()) {
       const xfTags = await this.xfRows<{ content_id: number; tag: string }>(
         `SELECT tc.content_id, t.tag FROM ${this.t('tag_content')} tc JOIN ${this.t('tag')} t ON t.tag_id = tc.tag_id
          WHERE tc.content_type = 'thread' AND tc.content_id IN (?)`,
         [threadIds],
       );
-      for (const { content_id: xfThreadId, tag } of xfTags) {
-        step.read++;
-        const mapped = this.mapping.tags.get(tag.toLowerCase());
-        if (mapped) add(this.threads.get(xfThreadId)!.id, mapped);
-        else unmapped.set(`tag "${tag}"`, (unmapped.get(`tag "${tag}"`) ?? 0) + 1);
-      }
       for (const xfThreadId of threadIds) {
         const thread = this.threads.get(xfThreadId)!;
         add(thread.id, this.mapping.forums.get(thread.nodeId)!.tags);
@@ -553,6 +586,12 @@ export class Importer {
         if (mapped) add(thread.id, mapped);
         else unmapped.set(label, (unmapped.get(label) ?? 0) + 1);
       }
+      for (const { content_id: xfThreadId, tag } of xfTags) {
+        step.read++;
+        const mapped = this.mapping.tags.get(tag.toLowerCase());
+        if (mapped) add(this.threads.get(xfThreadId)!.id, mapped);
+        else unmapped.set(`tag "${tag}"`, (unmapped.get(`tag "${tag}"`) ?? 0) + 1);
+      }
     }
     skip(step, 'tag or prefix not in the mapping', [...unmapped.values()].reduce((sum, n) => sum + n, 0));
     const top = [...unmapped].sort((a, b) => b[1] - a[1]).slice(0, 25);
@@ -560,6 +599,12 @@ export class Importer {
       this.report.notes.push(`Most used tags and prefixes not in the mapping: ${top.map(([name, n]) => `${name} ×${n}`).join(', ')}.`);
     }
 
+    const threadTags: [threadId: string, tag: string][] = [];
+    for (const [threadId, tags] of tagsByThread) {
+      const kept = [...tags].slice(0, MAX_TAGS);
+      skip(step, `over the app's ${MAX_TAGS} tags per thread`, tags.size - kept.length);
+      for (const tag of kept) threadTags.push([threadId, tag]);
+    }
     const names = [...new Set(threadTags.map(([, tag]) => tag))];
     await insertRows(this.pg, 'forum_tags', [['name', 'text']], names.map((name) => [name]), { onConflict: 'ON CONFLICT (name) DO NOTHING' });
     const { rows } = await this.pg.query<{ id: string; name: string }>('SELECT id, name FROM forum_tags WHERE name = ANY($1)', [names]);
@@ -570,7 +615,6 @@ export class Importer {
         'forum_thread_tags',
         [['thread_id', 'uuid'], ['tag_id', 'uuid']],
         batch.map(([threadId, tag]) => [threadId, tagIds.get(tag)]),
-        { onConflict: 'ON CONFLICT DO NOTHING' },
       );
     }
   }
@@ -613,9 +657,16 @@ function truncated(message: string): string {
   const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   let html = '';
   for (const paragraph of text.replace(/\r\n?/g, '\n').split(/\n\s*\n+/)) {
-    const block = `<p>${escape(paragraph.trim()).replace(/\n/g, '<br>')}</p>`;
-    if (html.length + block.length + note.length > MAX_CONTENT) break;
-    html += block;
+    const body = escape(paragraph.trim()).replace(/\n/g, '<br>');
+    const room = MAX_CONTENT - html.length - note.length - '<p></p>'.length;
+    if (body.length <= room) {
+      html += `<p>${body}</p>`;
+      continue;
+    }
+    // Cut to fit, without leaving half an entity or <br> at the end
+    const cut = body.slice(0, room).replace(/&[a-z]*$|<[a-z]*$/, '');
+    if (cut) html += `<p>${cut}</p>`;
+    break;
   }
   return html + note;
 }

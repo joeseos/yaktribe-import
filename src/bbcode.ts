@@ -112,16 +112,23 @@ export function parse(message: string, stats: ConvertStats): Node[] {
     }
 
     const node: TagNode = { type: 'tag', name, ...parseOption(rawOption), children: [] };
-    top().children.push(node);
-    if (VOID.has(name)) continue;
     if (RAW.has(name)) {
-      const close = text.toLowerCase().indexOf(`[/${name}]`, index);
-      const end = close === -1 ? text.length : close;
-      if (end > index) node.children.push({ type: 'text', text: text.slice(index, end) });
-      index = close === -1 ? text.length : close + name.length + 3;
+      // An unclosed raw tag stays as text, as on XenForo, rather than swallowing the rest of the post
+      const close = new RegExp(`\\[/${name}\\]`, 'ig');
+      close.lastIndex = index;
+      const end = close.exec(text);
+      if (!end) {
+        pushText(whole);
+        continue;
+      }
+      if (end.index > index) node.children.push({ type: 'text', text: text.slice(index, end.index) });
+      top().children.push(node);
+      index = close.lastIndex;
       TAG.lastIndex = index;
       continue;
     }
+    top().children.push(node);
+    if (VOID.has(name)) continue;
     stack.push(node);
   }
   pushText(text.slice(index));

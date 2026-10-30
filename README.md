@@ -73,12 +73,13 @@ npm test            # BB code conversion
 npm run typecheck
 ```
 
-`test/fixtures/xenforo.sql` is a tiny XenForo forum with one of each case the import handles, and `test/fixtures/munda-manager.sql` adds two accounts and one thread of the app's own. Load them into an empty MariaDB database and a Munda Manager database, use the mapping below, and run the import:
+`test/fixtures/xenforo.sql` is a tiny XenForo forum with one of each case the import handles, and `test/fixtures/munda-manager.sql` adds three accounts and one thread of the app's own. Load them into an empty MariaDB database and a Munda Manager database, use the mapping below, and run the import:
 
 ```csv
 source,key,category,tags
 forum,2,gang-discussion,Necromunda
 forum,3,battle-reports,Necromunda;Battle Report
 tag,campaign,,Campaigns
+tag,scenery,,Terrain;Scenery
 prefix,1,,Battle Report
 ```
