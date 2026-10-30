@@ -1,0 +1,621 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import type { Connection, RowDataPacket } from 'mysql2/promise';
+import type { Client } from 'pg';
+import { collectRefs, parse, render, type Resolver } from './bbcode.ts';
+import type { Mapping } from './mapping.ts';
+import { Progress } from './progress.ts';
+import type { Report, StepReport } from './report.ts';
+
+export interface ImportOptions {
+  /** XenForo's table prefix, xf_ unless the install changed it */
+  prefix: string;
+  /** Threads per batch */
+  batchSize: number;
+  /** Import only the first N threads, for quick test runs */
+  limitThreads: number | null;
+}
+
+// Munda Manager's own limits, from the forum migrations
+const POSTS_PER_PAGE = 20;
+const MAX_CONTENT = 50_000;
+const MAX_TITLE = 150;
+const LIKE_REACTION_ID = 1;
+// Tables whose forum triggers would overwrite dates, numbers and counters, or rate-limit the import
+const TRIGGER_TABLES = ['forum_threads', 'forum_posts', 'forum_post_likes'];
+
+interface ThreadInfo {
+  id: string;
+  path: string;
+  nodeId: number;
+  prefixId: number;
+}
+
+interface Author {
+  id: string;
+  profileId: string | null;
+}
+
+/** Same as slugifyHeading in Munda Manager, which builds forum thread URLs. */
+export function slugify(text: string): string {
+  const slug = text
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'section';
+}
+
+/** Same as forumPostHref in Munda Manager: the page a post is on, scrolled to it. */
+export function postHref(threadPath: string, postNumber: number): string {
+  const page = Math.ceil(postNumber / POSTS_PER_PAGE);
+  return `${page === 1 ? threadPath : `${threadPath}/page/${page}`}#post-${postNumber}`;
+}
+
+export function hashEmail(email: string): string {
+  return createHash('sha256').update(email.trim().toLowerCase()).digest('hex');
+}
+
+const fromUnix = (seconds: number) => new Date(seconds * 1000);
+
+function chunks<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+function skip(step: StepReport, reason: string, count = 1) {
+  if (count) step.skipped[reason] = (step.skipped[reason] ?? 0) + count;
+}
+
+/** Inserts rows as one statement, one array parameter per column. */
+async function insertRows(
+  pg: Client,
+  table: string,
+  columns: [name: string, type: string][],
+  rows: unknown[][],
+  { overriding = false, onConflict = '' } = {},
+) {
+  if (!rows.length) return 0;
+  const arrays = columns.map((_, i) => rows.map((row) => row[i]));
+  const unnest = columns.map(([, type], i) => `$${i + 1}::${type}[]`).join(', ');
+  const result = await pg.query(
+    `INSERT INTO ${table} (${columns.map(([name]) => name).join(', ')})
+     ${overriding ? 'OVERRIDING SYSTEM VALUE' : ''}
+     SELECT * FROM unnest(${unnest}) ${onConflict}`,
+    arrays,
+  );
+  return result.rowCount ?? 0;
+}
+
+export class Importer {
+  private readonly xf: Connection;
+  private readonly pg: Client;
+  private readonly mapping: Mapping;
+  private readonly report: Report;
+  private readonly options: ImportOptions;
+
+  private readonly categoryIds = new Map<string, string>();
+  private readonly threads = new Map<number, ThreadInfo>();
+  private readonly authors = new Map<number, Author>();
+  private readonly guests = new Map<string, string>();
+
+  constructor(xf: Connection, pg: Client, mapping: Mapping, report: Report, options: ImportOptions) {
+    this.xf = xf;
+    this.pg = pg;
+    this.mapping = mapping;
+    this.report = report;
+    this.options = options;
+  }
+
+  private t(name: string): string {
+    return `${this.options.prefix}${name}`;
+  }
+
+  private async xfRows<T>(sql: string, params: unknown[] = []): Promise<T[]> {
+    const [rows] = await this.xf.query<RowDataPacket[]>(sql, params);
+    return rows as T[];
+  }
+
+  private threadChunks(): number[][] {
+    return chunks([...this.threads.keys()], this.options.batchSize);
+  }
+
+  /** Runs every step in one transaction: a failure, or a dry run, leaves Munda Manager as it was. */
+  async run(dryRun: boolean) {
+    await this.pg.query('BEGIN');
+    try {
+      await this.pg.query(readFileSync(new URL('../sql/import-schema.sql', import.meta.url), 'utf8'));
+      for (const table of TRIGGER_TABLES) await this.pg.query(`ALTER TABLE public.${table} DISABLE TRIGGER USER`);
+
+      await this.checkForums();
+      await this.ensureCategories();
+      await this.removePreviousImport();
+      await this.importThreads();
+      await this.mapPosts();
+      await this.importAuthors();
+      await this.importPosts();
+      await this.importLikes();
+      await this.importTags();
+      await this.recount();
+
+      for (const table of TRIGGER_TABLES) await this.pg.query(`ALTER TABLE public.${table} ENABLE TRIGGER USER`);
+      if (dryRun) {
+        await this.pg.query('ROLLBACK');
+      } else {
+        await this.pg.query('COMMIT');
+        this.report.committed = true;
+      }
+    } catch (error) {
+      await this.pg.query('ROLLBACK').catch(() => {});
+      throw error;
+    }
+  }
+
+  private async checkForums() {
+    const ids = [...this.mapping.forums.keys()];
+    const nodes = await this.xfRows<{ node_id: number; node_type_id: string | Buffer }>(
+      `SELECT node_id, node_type_id FROM ${this.t('node')} WHERE node_id IN (?)`,
+      [ids],
+    );
+    const found = new Map(nodes.map((node) => [node.node_id, String(node.node_type_id)]));
+    const missing = ids.filter((id) => !found.has(id));
+    if (missing.length) throw new Error(`The mapping lists forums XenForo doesn't have: ${missing.join(', ')}`);
+    const notForums = ids.filter((id) => found.get(id) !== 'Forum');
+    if (notForums.length) throw new Error(`The mapping lists nodes that aren't forums (categories, links or pages): ${notForums.join(', ')}`);
+
+    const unmapped = await this.xfRows<{ node_id: number; title: string; n: number }>(
+      `SELECT n.node_id, n.title, COUNT(*) AS n FROM ${this.t('node')} n
+       JOIN ${this.t('thread')} t ON t.node_id = n.node_id AND t.discussion_state = 'visible'
+       WHERE n.node_type_id = 'Forum' AND n.node_id NOT IN (?) GROUP BY n.node_id, n.title ORDER BY n DESC`,
+      [ids],
+    );
+    if (unmapped.length) {
+      this.report.notes.push(`Forums not in the mapping, left out: ${unmapped.map((forum) => `"${forum.title}" (${forum.node_id}) ×${forum.n}`).join(', ')}.`);
+    }
+  }
+
+  private async ensureCategories() {
+    const slugs = [...new Set([...this.mapping.forums.values()].map((forum) => forum.category))];
+    const { rows } = await this.pg.query<{ id: string; slug: string }>(
+      'SELECT id, slug FROM forum_categories WHERE slug = ANY($1)',
+      [slugs],
+    );
+    for (const row of rows) this.categoryIds.set(row.slug, row.id);
+    for (const slug of slugs.filter((slug) => !this.categoryIds.has(slug))) {
+      const name = slug.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase());
+      const { rows: created } = await this.pg.query<{ id: string }>(
+        `INSERT INTO forum_categories (slug, name, position)
+         VALUES ($1, $2, (SELECT coalesce(max(position), 0) + 1 FROM forum_categories)) RETURNING id`,
+        [slug, name],
+      );
+      this.categoryIds.set(slug, created[0].id);
+      this.report.notes.push(`Created the category "${slug}" (named "${name}"), which didn't exist yet. Rename it in the app if needed.`);
+    }
+  }
+
+  private async removePreviousImport() {
+    const { rowCount } = await this.pg.query('DELETE FROM forum_threads WHERE id IN (SELECT thread_id FROM yaktribe.thread_map)');
+    await this.pg.query('TRUNCATE yaktribe.post_map');
+    await this.pg.query('DELETE FROM forum_imported_authors');
+    if (rowCount) this.report.notes.push(`Removed ${rowCount.toLocaleString('en-US')} threads from the previous import first.`);
+  }
+
+  private async importThreads() {
+    const step = this.report.step('Threads');
+    const forumIds = [...this.mapping.forums.keys()];
+    const hasPosts = `EXISTS (SELECT 1 FROM ${this.t('post')} p WHERE p.thread_id = t.thread_id AND p.message_state = 'visible')`;
+    const where = `t.node_id IN (?) AND t.discussion_state = 'visible' AND t.discussion_type <> 'redirect' AND ${hasPosts}`;
+
+    const states = await this.xfRows<{ discussion_state: string; discussion_type: string; has_posts: number; n: number }>(
+      `SELECT discussion_state, discussion_type, ${hasPosts} AS has_posts, COUNT(*) AS n FROM ${this.t('thread')} t
+       WHERE t.node_id IN (?) GROUP BY discussion_state, discussion_type, has_posts`,
+      [forumIds],
+    );
+    let total = 0;
+    for (const { discussion_state: state, discussion_type: type, has_posts: hasVisiblePosts, n } of states) {
+      if (state !== 'visible') skip(step, `${state} on YakTribe`, Number(n));
+      else if (type === 'redirect') skip(step, 'redirect to a moved thread', Number(n));
+      else if (!hasVisiblePosts) skip(step, 'no visible posts', Number(n));
+      else total += Number(n);
+    }
+    if (this.options.limitThreads !== null && total > this.options.limitThreads) {
+      skip(step, 'over --limit-threads', total - this.options.limitThreads);
+      total = this.options.limitThreads;
+    }
+
+    const { rows: existing } = await this.pg.query<{ number: string }>(
+      'SELECT number FROM forum_threads WHERE id NOT IN (SELECT thread_id FROM yaktribe.thread_map)',
+    );
+    const taken = new Set(existing.map((row) => Number(row.number)));
+
+    const progress = new Progress('Threads', total);
+    let lastId = 0;
+    while (step.read < total) {
+      const batch = await this.xfRows<{
+        thread_id: number; node_id: number; title: string; post_date: number; sticky: number; discussion_open: number; prefix_id: number;
+      }>(
+        `SELECT thread_id, node_id, title, post_date, sticky, discussion_open, prefix_id FROM ${this.t('thread')} t
+         WHERE ${where} AND t.thread_id > ? ORDER BY t.thread_id LIMIT ?`,
+        [forumIds, lastId, Math.min(this.options.batchSize, total - step.read)],
+      );
+      if (!batch.length) break;
+      lastId = batch[batch.length - 1].thread_id;
+      step.read += batch.length;
+
+      const clashes = batch.filter((thread) => taken.has(thread.thread_id)).map((thread) => thread.thread_id);
+      if (clashes.length) {
+        throw new Error(
+          `Munda Manager already has threads numbered ${clashes.slice(0, 10).join(', ')}, which the import needs for YakTribe thread ids. ` +
+            'Import into a forum whose own threads are numbered above the highest YakTribe thread id.',
+        );
+      }
+
+      const rows = batch.map((thread) => {
+        const forum = this.mapping.forums.get(thread.node_id)!;
+        let title = thread.title.replace(/\s+/g, ' ').trim() || '(untitled)';
+        if (title.length > MAX_TITLE) title = title.slice(0, MAX_TITLE).trim();
+        const info: ThreadInfo = {
+          id: randomUUID(),
+          path: `/forum/${forum.category}/${thread.thread_id}-${slugify(title)}`,
+          nodeId: thread.node_id,
+          prefixId: thread.prefix_id,
+        };
+        this.threads.set(thread.thread_id, info);
+        const created = fromUnix(thread.post_date);
+        return [info.id, thread.thread_id, this.categoryIds.get(forum.category), title, thread.sticky === 1, thread.discussion_open === 0, created, created];
+      });
+      step.written += await insertRows(
+        this.pg,
+        'forum_threads',
+        [['id', 'uuid'], ['number', 'bigint'], ['category_id', 'uuid'], ['title', 'text'], ['is_pinned', 'boolean'],
+          ['is_locked', 'boolean'], ['created_at', 'timestamptz'], ['last_post_at', 'timestamptz']],
+        rows,
+        { overriding: true },
+      );
+      await insertRows(
+        this.pg,
+        'yaktribe.thread_map',
+        [['xf_thread_id', 'integer'], ['thread_id', 'uuid'], ['path', 'text']],
+        batch.map((thread) => {
+          const info = this.threads.get(thread.thread_id)!;
+          return [thread.thread_id, info.id, info.path];
+        }),
+      );
+      progress.tick(batch.length);
+    }
+    progress.finish();
+  }
+
+  /** Numbers every visible post first, so quotes and links can point at posts in any thread. */
+  private async mapPosts() {
+    const step = this.report.step('Post numbers');
+    const progress = new Progress('Numbering', this.threads.size);
+    for (const threadIds of this.threadChunks()) {
+      const states = await this.xfRows<{ message_state: string; n: number }>(
+        `SELECT message_state, COUNT(*) AS n FROM ${this.t('post')} WHERE thread_id IN (?) GROUP BY message_state`,
+        [threadIds],
+      );
+      for (const { message_state: state, n } of states) {
+        if (state !== 'visible') skip(step, `${state} on YakTribe`, Number(n));
+      }
+      const posts = await this.xfRows<{ post_id: number; thread_id: number; n: number }>(
+        `SELECT post_id, thread_id, ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY position, post_date, post_id) AS n
+         FROM ${this.t('post')} WHERE thread_id IN (?) AND message_state = 'visible'`,
+        [threadIds],
+      );
+      step.read += posts.length;
+      step.written += await insertRows(
+        this.pg,
+        'yaktribe.post_map',
+        [['xf_post_id', 'integer'], ['post_id', 'uuid'], ['xf_thread_id', 'integer'], ['post_number', 'integer']],
+        posts.map((post) => [post.post_id, randomUUID(), post.thread_id, Number(post.n)]),
+      );
+      progress.tick(threadIds.length);
+    }
+    progress.finish();
+  }
+
+  /** Everyone who wrote or liked an imported post, linked to a Munda Manager account when a confirmed email matches. */
+  private async importAuthors() {
+    const step = this.report.step('Authors');
+    const userIds = new Set<number>();
+    for (const threadIds of this.threadChunks()) {
+      const rows = await this.xfRows<{ user_id: number }>(
+        `SELECT DISTINCT user_id FROM ${this.t('post')} WHERE thread_id IN (?) AND message_state = 'visible' AND user_id > 0
+         UNION
+         SELECT DISTINCT r.reaction_user_id FROM ${this.t('reaction_content')} r
+         JOIN ${this.t('post')} p ON p.post_id = r.content_id
+         WHERE r.content_type = 'post' AND r.reaction_id = ? AND p.thread_id IN (?) AND p.message_state = 'visible'`,
+        [threadIds, LIKE_REACTION_ID, threadIds],
+      );
+      for (const row of rows) userIds.add(row.user_id);
+    }
+
+    const progress = new Progress('Authors', userIds.size);
+    let matched = 0;
+    for (const ids of chunks([...userIds], 1000)) {
+      const users = await this.xfRows<{ user_id: number; username: string; email: string }>(
+        `SELECT user_id, username, email FROM ${this.t('user')} WHERE user_id IN (?)`,
+        [ids],
+      );
+      step.read += users.length;
+      skip(step, 'account deleted on YakTribe (posts keep the name they were written under)', ids.length - users.length);
+
+      const emails = users.map((user) => user.email.trim().toLowerCase()).filter(Boolean);
+      const { rows: accounts } = await this.pg.query<{ id: string; email: string }>(
+        `SELECT u.id, lower(u.email) AS email FROM auth.users u JOIN profiles p ON p.id = u.id
+         WHERE u.email_confirmed_at IS NOT NULL AND lower(u.email) = ANY($1)`,
+        [emails],
+      );
+      const profileByEmail = new Map(accounts.map((account) => [account.email, account.id]));
+
+      const rows = users.map((user) => {
+        const profileId = profileByEmail.get(user.email.trim().toLowerCase()) ?? null;
+        if (profileId) matched++;
+        const author = { id: randomUUID(), profileId };
+        this.authors.set(user.user_id, author);
+        return [author.id, user.user_id, user.username, profileId];
+      });
+      step.written += await insertRows(
+        this.pg,
+        'forum_imported_authors',
+        [['id', 'uuid'], ['xf_user_id', 'integer'], ['username', 'text'], ['profile_id', 'uuid']],
+        rows,
+      );
+      await insertRows(
+        this.pg,
+        'yaktribe.author_emails',
+        [['author_id', 'uuid'], ['email_sha256', 'text']],
+        users.filter((user) => user.email.trim()).map((user) => [this.authors.get(user.user_id)!.id, hashEmail(user.email)]),
+      );
+      progress.tick(ids.length);
+    }
+    progress.finish();
+    this.report.notes.push(
+      `${matched.toLocaleString('en-US')} of ${this.authors.size.toLocaleString('en-US')} YakTribe authors matched a confirmed Munda Manager account by email.`,
+    );
+  }
+
+  /** A post by a guest or a deleted account: an author with the name it was posted under. */
+  private async guestAuthor(username: string): Promise<string> {
+    const name = username.trim() || 'Guest';
+    const key = name.toLowerCase();
+    let id = this.guests.get(key);
+    if (!id) {
+      id = randomUUID();
+      this.guests.set(key, id);
+      await this.pg.query('INSERT INTO forum_imported_authors (id, username) VALUES ($1, $2)', [id, name]);
+    }
+    return id;
+  }
+
+  private async resolverFor(messages: ReturnType<typeof parse>[]): Promise<Resolver> {
+    const refs = { postIds: new Set<number>(), threadIds: new Set<number>(), userIds: new Set<number>() };
+    for (const nodes of messages) collectRefs(nodes, refs);
+    const { rows: posts } = await this.pg.query<{ xf_post_id: number; path: string; post_number: number }>(
+      `SELECT pm.xf_post_id, tm.path, pm.post_number FROM yaktribe.post_map pm
+       JOIN yaktribe.thread_map tm ON tm.xf_thread_id = pm.xf_thread_id WHERE pm.xf_post_id = ANY($1)`,
+      [[...refs.postIds]],
+    );
+    const postHrefs = new Map(posts.map((post) => [post.xf_post_id, postHref(post.path, post.post_number)]));
+    return {
+      postHref: (id) => postHrefs.get(id) ?? null,
+      threadHref: (id) => this.threads.get(id)?.path ?? null,
+      mention: (id) => {
+        const profileId = this.authors.get(id)?.profileId;
+        return profileId ? { profileId } : null;
+      },
+    };
+  }
+
+  private async importPosts() {
+    const step = this.report.step('Posts');
+    const { rows: [{ count }] } = await this.pg.query<{ count: string }>('SELECT count(*) FROM yaktribe.post_map');
+    const progress = new Progress('Posts', Number(count));
+    for (const threadIds of this.threadChunks()) {
+      const posts = await this.xfRows<{
+        post_id: number; thread_id: number; user_id: number; username: string; post_date: number; message: string; last_edit_date: number;
+      }>(
+        `SELECT post_id, thread_id, user_id, username, post_date, message, last_edit_date FROM ${this.t('post')}
+         WHERE thread_id IN (?) AND message_state = 'visible'`,
+        [threadIds],
+      );
+      step.read += posts.length;
+      const { rows: mapped } = await this.pg.query<{ xf_post_id: number; post_id: string; post_number: number }>(
+        'SELECT xf_post_id, post_id, post_number FROM yaktribe.post_map WHERE xf_post_id = ANY($1)',
+        [posts.map((post) => post.post_id)],
+      );
+      const numbers = new Map(mapped.map((row) => [row.xf_post_id, row]));
+
+      const parsed = posts.map((post) => parse(post.message, this.report.conversion));
+      const resolver = await this.resolverFor(parsed);
+      const rows: unknown[][] = [];
+      for (const [i, post] of posts.entries()) {
+        const target = numbers.get(post.post_id)!;
+        const author = post.user_id > 0 ? this.authors.get(post.user_id) : undefined;
+        const importedAuthorId = author?.id ?? (await this.guestAuthor(post.username));
+        let content = render(parsed[i], resolver, this.report.conversion);
+        if (content.length > MAX_CONTENT) {
+          this.report.truncatedPosts.push(post.post_id);
+          content = truncated(post.message);
+        }
+        rows.push([
+          target.post_id, this.threads.get(post.thread_id)!.id, target.post_number, author?.profileId ?? null, importedAuthorId,
+          content, fromUnix(post.post_date), post.last_edit_date > 0 ? fromUnix(post.last_edit_date) : null,
+        ]);
+      }
+      step.written += await insertRows(
+        this.pg,
+        'forum_posts',
+        [['id', 'uuid'], ['thread_id', 'uuid'], ['post_number', 'integer'], ['author_id', 'uuid'], ['imported_author_id', 'uuid'],
+          ['content', 'text'], ['created_at', 'timestamptz'], ['updated_at', 'timestamptz']],
+        rows,
+      );
+      progress.tick(posts.length);
+    }
+    progress.finish();
+  }
+
+  private async importLikes() {
+    const step = this.report.step('Likes');
+    const progress = new Progress('Likes', this.threads.size);
+    for (const threadIds of this.threadChunks()) {
+      const reactions = await this.xfRows<{ content_id: number; reaction_id: number; reaction_user_id: number; reaction_date: number; post_user_id: number }>(
+        `SELECT r.content_id, r.reaction_id, r.reaction_user_id, r.reaction_date, p.user_id AS post_user_id
+         FROM ${this.t('reaction_content')} r JOIN ${this.t('post')} p ON p.post_id = r.content_id
+         WHERE r.content_type = 'post' AND p.thread_id IN (?) AND p.message_state = 'visible'`,
+        [threadIds],
+      );
+      const { rows: mapped } = await this.pg.query<{ xf_post_id: number; post_id: string }>(
+        'SELECT xf_post_id, post_id FROM yaktribe.post_map WHERE xf_post_id = ANY($1)',
+        [[...new Set(reactions.map((reaction) => reaction.content_id))]],
+      );
+      const postIds = new Map(mapped.map((row) => [row.xf_post_id, row.post_id]));
+
+      const likes: unknown[][] = [];
+      const pending: unknown[][] = [];
+      for (const reaction of reactions) {
+        step.read++;
+        if (reaction.reaction_id !== LIKE_REACTION_ID) {
+          skip(step, 'not a Like (other reaction)');
+          continue;
+        }
+        const liker = this.authors.get(reaction.reaction_user_id);
+        if (!liker) {
+          skip(step, 'liker account deleted on YakTribe');
+          continue;
+        }
+        const postAuthor = this.authors.get(reaction.post_user_id);
+        if (reaction.reaction_user_id === reaction.post_user_id || (liker.profileId && liker.profileId === postAuthor?.profileId)) {
+          skip(step, 'own post');
+          continue;
+        }
+        const postId = postIds.get(reaction.content_id)!;
+        const date = fromUnix(reaction.reaction_date);
+        if (liker.profileId) likes.push([postId, liker.profileId, date]);
+        else pending.push([postId, liker.id, date]);
+      }
+      step.written += await insertRows(
+        this.pg,
+        'forum_post_likes',
+        [['post_id', 'uuid'], ['user_id', 'uuid'], ['created_at', 'timestamptz']],
+        likes,
+        { onConflict: 'ON CONFLICT DO NOTHING' },
+      );
+      step.written += await insertRows(
+        this.pg,
+        'yaktribe.pending_likes',
+        [['post_id', 'uuid'], ['author_id', 'uuid'], ['created_at', 'timestamptz']],
+        pending,
+        { onConflict: 'ON CONFLICT DO NOTHING' },
+      );
+      progress.tick(threadIds.length);
+    }
+    progress.finish();
+  }
+
+  private async importTags() {
+    const step = this.report.step('Thread tags');
+    const unmapped = new Map<string, number>();
+    const prefixNames = new Map(
+      (
+        await this.xfRows<{ prefix_id: number; title: string }>(
+          `SELECT p.prefix_id, ph.phrase_text AS title FROM ${this.t('thread_prefix')} p
+           LEFT JOIN ${this.t('phrase')} ph ON ph.title = CONCAT('thread_prefix.', p.prefix_id) AND ph.language_id = 0`,
+        )
+      ).map((prefix) => [prefix.prefix_id, prefix.title ?? `prefix ${prefix.prefix_id}`]),
+    );
+
+    const threadTags: [threadId: string, tag: string][] = [];
+    const add = (threadId: string, tags: string[]) => tags.forEach((tag) => threadTags.push([threadId, tag]));
+    for (const threadIds of this.threadChunks()) {
+      const xfTags = await this.xfRows<{ content_id: number; tag: string }>(
+        `SELECT tc.content_id, t.tag FROM ${this.t('tag_content')} tc JOIN ${this.t('tag')} t ON t.tag_id = tc.tag_id
+         WHERE tc.content_type = 'thread' AND tc.content_id IN (?)`,
+        [threadIds],
+      );
+      for (const { content_id: xfThreadId, tag } of xfTags) {
+        step.read++;
+        const mapped = this.mapping.tags.get(tag.toLowerCase());
+        if (mapped) add(this.threads.get(xfThreadId)!.id, mapped);
+        else unmapped.set(`tag "${tag}"`, (unmapped.get(`tag "${tag}"`) ?? 0) + 1);
+      }
+      for (const xfThreadId of threadIds) {
+        const thread = this.threads.get(xfThreadId)!;
+        add(thread.id, this.mapping.forums.get(thread.nodeId)!.tags);
+        if (!thread.prefixId) continue;
+        step.read++;
+        const mapped = this.mapping.prefixes.get(thread.prefixId);
+        const label = `prefix "${prefixNames.get(thread.prefixId) ?? thread.prefixId}" (${thread.prefixId})`;
+        if (mapped) add(thread.id, mapped);
+        else unmapped.set(label, (unmapped.get(label) ?? 0) + 1);
+      }
+    }
+    skip(step, 'tag or prefix not in the mapping', [...unmapped.values()].reduce((sum, n) => sum + n, 0));
+    const top = [...unmapped].sort((a, b) => b[1] - a[1]).slice(0, 25);
+    if (top.length) {
+      this.report.notes.push(`Most used tags and prefixes not in the mapping: ${top.map(([name, n]) => `${name} ×${n}`).join(', ')}.`);
+    }
+
+    const names = [...new Set(threadTags.map(([, tag]) => tag))];
+    await insertRows(this.pg, 'forum_tags', [['name', 'text']], names.map((name) => [name]), { onConflict: 'ON CONFLICT (name) DO NOTHING' });
+    const { rows } = await this.pg.query<{ id: string; name: string }>('SELECT id, name FROM forum_tags WHERE name = ANY($1)', [names]);
+    const tagIds = new Map(rows.map((row) => [row.name, row.id]));
+    for (const batch of chunks(threadTags, 10_000)) {
+      step.written += await insertRows(
+        this.pg,
+        'forum_thread_tags',
+        [['thread_id', 'uuid'], ['tag_id', 'uuid']],
+        batch.map(([threadId, tag]) => [threadId, tagIds.get(tag)]),
+        { onConflict: 'ON CONFLICT DO NOTHING' },
+      );
+    }
+  }
+
+  /** What the disabled triggers would have kept: counters, last posts, thread authors and the number sequence. */
+  private async recount() {
+    const pg = this.pg;
+    await pg.query(`
+      UPDATE forum_threads t SET post_count = s.n, last_post_at = s.last_at
+      FROM (
+        SELECT p.thread_id, count(*) AS n, max(p.created_at) AS last_at
+        FROM forum_posts p JOIN yaktribe.thread_map m ON m.thread_id = p.thread_id
+        GROUP BY p.thread_id
+      ) s
+      WHERE t.id = s.thread_id`);
+    await pg.query(`
+      UPDATE forum_threads t SET author_id = p.author_id, imported_author_id = p.imported_author_id
+      FROM forum_posts p, yaktribe.thread_map m
+      WHERE m.thread_id = t.id AND p.thread_id = t.id AND p.post_number = 1`);
+    await pg.query(`
+      UPDATE forum_threads t SET last_post_author_id = p.author_id
+      FROM forum_posts p, yaktribe.thread_map m
+      WHERE m.thread_id = t.id AND p.thread_id = t.id AND p.post_number = t.post_count`);
+    await pg.query(`
+      UPDATE forum_posts p SET like_count =
+        (SELECT count(*) FROM forum_post_likes l WHERE l.post_id = p.id) +
+        (SELECT count(*) FROM yaktribe.pending_likes l WHERE l.post_id = p.id)
+      WHERE p.id IN (SELECT post_id FROM yaktribe.post_map)`);
+    await pg.query('UPDATE forum_categories c SET thread_count = (SELECT count(*) FROM forum_threads t WHERE t.category_id = c.id)');
+    await pg.query(`
+      SELECT setval(pg_get_serial_sequence('public.forum_threads', 'number'), greatest(max(number), 1))
+      FROM forum_threads`);
+  }
+}
+
+/** A post too long once converted: its text without BB code, cut to fit. */
+function truncated(message: string): string {
+  const note = '<p><em>[This post was cut short in the move from YakTribe.]</em></p>';
+  const text = message.replace(/\[\/?[a-z*]+(?:=[^\]]*|\s[^\]]*)?\]/gi, '');
+  const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let html = '';
+  for (const paragraph of text.replace(/\r\n?/g, '\n').split(/\n\s*\n+/)) {
+    const block = `<p>${escape(paragraph.trim()).replace(/\n/g, '<br>')}</p>`;
+    if (html.length + block.length + note.length > MAX_CONTENT) break;
+    html += block;
+  }
+  return html + note;
+}
