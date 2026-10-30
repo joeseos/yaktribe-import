@@ -148,15 +148,23 @@ export class Importer {
 
       for (const table of TRIGGER_TABLES) await this.pg.query(`ALTER TABLE public.${table} ENABLE TRIGGER USER`);
       if (dryRun) {
-        await this.pg.query('ROLLBACK');
+        await this.rollback();
       } else {
         await this.pg.query('COMMIT');
         this.report.committed = true;
       }
     } catch (error) {
-      await this.pg.query('ROLLBACK').catch(() => {});
+      await this.rollback().catch(() => {});
       throw error;
     }
+  }
+
+  /** Sequences ignore rollbacks, so hand back the thread numbers a dry or failed run took. */
+  private async rollback() {
+    await this.pg.query('ROLLBACK');
+    await this.pg.query(`
+      SELECT setval(pg_get_serial_sequence('public.forum_threads', 'number'), greatest(max(number), 1))
+      FROM forum_threads`);
   }
 
   private async checkForums() {
@@ -241,11 +249,6 @@ export class Importer {
       total = this.options.limitThreads;
     }
 
-    const { rows: existing } = await this.pg.query<{ number: string }>(
-      'SELECT number FROM forum_threads WHERE id NOT IN (SELECT thread_id FROM yaktribe.thread_map)',
-    );
-    const taken = new Set(existing.map((row) => Number(row.number)));
-
     const progress = new Progress('Threads', total);
     let lastId = 0;
     while (step.read < total) {
@@ -260,27 +263,25 @@ export class Importer {
       lastId = batch[batch.length - 1].thread_id;
       step.read += batch.length;
 
-      const clashes = batch.filter((thread) => taken.has(thread.thread_id)).map((thread) => thread.thread_id);
-      if (clashes.length) {
-        throw new Error(
-          `Munda Manager already has threads numbered ${clashes.slice(0, 10).join(', ')}, which the import needs for YakTribe thread ids. ` +
-            'Import into a forum whose own threads are numbered above the highest YakTribe thread id.',
-        );
-      }
-
-      const rows = batch.map((thread) => {
+      // Numbers from the app's own sequence, taken up front so each thread's path is known and they follow YakTribe's order
+      const { rows: numbers } = await this.pg.query<{ number: string }>(
+        `SELECT nextval(pg_get_serial_sequence('public.forum_threads', 'number')) AS number FROM generate_series(1, $1)`,
+        [batch.length],
+      );
+      const rows = batch.map((thread, i) => {
+        const number = Number(numbers[i].number);
         const forum = this.mapping.forums.get(thread.node_id)!;
         let title = thread.title.replace(/\s+/g, ' ').trim() || '(untitled)';
         if (title.length > MAX_TITLE) title = title.slice(0, MAX_TITLE).trim();
         const info: ThreadInfo = {
           id: randomUUID(),
-          path: `/forum/${forum.category}/${thread.thread_id}-${slugify(title)}`,
+          path: `/forum/${forum.category}/${number}-${slugify(title)}`,
           nodeId: thread.node_id,
           prefixId: thread.prefix_id,
         };
         this.threads.set(thread.thread_id, info);
         const created = fromUnix(thread.post_date);
-        return [info.id, thread.thread_id, this.categoryIds.get(forum.category), title, thread.sticky === 1, thread.discussion_open === 0, created, created];
+        return [info.id, number, this.categoryIds.get(forum.category), title, thread.sticky === 1, thread.discussion_open === 0, created, created];
       });
       step.written += await insertRows(
         this.pg,
@@ -619,7 +620,7 @@ export class Importer {
     }
   }
 
-  /** What the disabled triggers would have kept: counters, last posts, thread authors and the number sequence. */
+  /** What the disabled triggers would have kept: counters, last posts and thread authors. */
   private async recount() {
     const pg = this.pg;
     await pg.query(`
@@ -644,9 +645,6 @@ export class Importer {
         (SELECT count(*) FROM yaktribe.pending_likes l WHERE l.post_id = p.id)
       WHERE p.id IN (SELECT post_id FROM yaktribe.post_map)`);
     await pg.query('UPDATE forum_categories c SET thread_count = (SELECT count(*) FROM forum_threads t WHERE t.category_id = c.id)');
-    await pg.query(`
-      SELECT setval(pg_get_serial_sequence('public.forum_threads', 'number'), greatest(max(number), 1))
-      FROM forum_threads`);
   }
 }
 

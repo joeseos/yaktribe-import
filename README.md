@@ -4,13 +4,13 @@ Imports the YakTribe XenForo 2 forum into the Munda Manager forum.
 
 It's a command-line tool. It reads a MariaDB/MySQL copy of the XenForo database and writes straight to a Munda Manager Postgres database. It shows progress for each step, and at the end it writes a report (HTML and JSON) listing what was read, written and skipped, and why.
 
-Everything runs in one transaction. A failure, or a `--dry-run`, leaves Munda Manager as it was. Running it again replaces the previous import rather than adding to it.
+Everything runs in one transaction. A failure, or a `--dry-run`, leaves Munda Manager as it was. Running it again replaces the previous import rather than adding to it, and the threads get new numbers.
 
 ## What it imports
 
 | XenForo | Munda Manager |
 | --- | --- |
-| Threads in the forums listed in `mapping.csv` (visible ones that have at least one visible post; redirects are skipped) | `forum_threads` in the mapped category. `number` keeps the XenForo thread id, so old thread URLs can redirect |
+| Threads in the forums listed in `mapping.csv` (visible ones that have at least one visible post; redirects are skipped) | `forum_threads` in the mapped category, numbered after the app's own threads in YakTribe's order. `yaktribe.thread_map` keeps the old id, so old thread URLs can redirect |
 | Visible posts, BB code converted to the app's HTML | `forum_posts`, numbered in thread order, with their original dates |
 | Post authors and Like-givers | `forum_imported_authors`, linked to a Munda Manager profile when the email matches a confirmed account |
 | Likes (reaction 1) | `forum_post_likes` for matched accounts. The rest wait in `yaktribe.pending_likes` until the person claims their YakTribe posts. `like_count` counts both |
@@ -63,7 +63,6 @@ Never point a test run at production.
 ## Before a production import
 
 - `sql/import-schema.sql` adds `forum_imported_authors` and an `imported_author_id` column on `forum_threads` and `forum_posts`. The import creates them if they're missing, which is fine on a test database. For production they belong in a Munda Manager migration, together with the app changes that show imported authors and the "Claim YakTribe posts" button.
-- Thread numbers: the import uses the XenForo thread id as `number`, and stops if Munda Manager already has a thread with one of those numbers. The app's own threads have to be numbered above YakTribe's highest thread id first.
 - The `yaktribe` schema keeps the id maps (for redirects from old URLs), hashed emails (for claiming) and pending likes. Nobody but the database owner can read it.
 
 ## Testing
