@@ -354,6 +354,7 @@ export class Importer {
 
     const progress = new Progress('Authors', userIds.size);
     let matched = 0;
+    let noEmail = 0;
     for (const ids of chunks([...userIds], 1000)) {
       const users = await this.xfRows<{ user_id: number; username: string; email: string }>(
         `SELECT user_id, username, ${VERIFIED_EMAIL} FROM ${this.t('user')} WHERE user_id IN (?)`,
@@ -363,6 +364,7 @@ export class Importer {
       skip(step, 'account deleted on YakTribe (posts keep the name they were written under)', ids.length - users.length);
 
       const profiles = await this.matchProfiles(users);
+      noEmail += users.filter((user) => !user.email.trim()).length;
       const rows = users.map((user) => {
         const profileId = profiles.get(user.user_id) ?? null;
         if (profileId) matched++;
@@ -386,7 +388,8 @@ export class Importer {
     }
     progress.finish();
     this.report.notes.push(
-      `${matched.toLocaleString('en-US')} of ${this.authors.size.toLocaleString('en-US')} YakTribe authors matched a confirmed Munda Manager account by email.`,
+      `${matched.toLocaleString('en-US')} of ${this.authors.size.toLocaleString('en-US')} YakTribe authors matched a confirmed Munda Manager account by email. ` +
+        `Authors with no email confirmed on YakTribe, who can't be matched or claim their posts: ${noEmail.toLocaleString('en-US')}.`,
     );
   }
 
