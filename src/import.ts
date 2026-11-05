@@ -21,6 +21,8 @@ const POSTS_PER_PAGE = 20;
 const MAX_CONTENT = 50_000;
 const MAX_TITLE = 150;
 const LIKE_REACTION_ID = 1;
+// XenForo users who never confirmed their email may not own it, so it neither matches an account nor allows a claim
+const VERIFIED_EMAIL = `IF(user_state IN ('email_confirm', 'email_confirm_edit'), '', email) AS email`;
 const MAX_TAGS = 3;
 // Posts per insert: thread batches can hold megathreads, so posts are paged on their own
 const POST_BATCH = 2000;
@@ -354,7 +356,7 @@ export class Importer {
     let matched = 0;
     for (const ids of chunks([...userIds], 1000)) {
       const users = await this.xfRows<{ user_id: number; username: string; email: string }>(
-        `SELECT user_id, username, email FROM ${this.t('user')} WHERE user_id IN (?)`,
+        `SELECT user_id, username, ${VERIFIED_EMAIL} FROM ${this.t('user')} WHERE user_id IN (?)`,
         [ids],
       );
       step.read += users.length;
@@ -426,7 +428,7 @@ export class Importer {
     const unknown = [...refs.userIds].filter((id) => !this.authors.has(id) && !this.mentioned.has(id));
     if (unknown.length) {
       const users = await this.xfRows<{ user_id: number; email: string }>(
-        `SELECT user_id, email FROM ${this.t('user')} WHERE user_id IN (?)`,
+        `SELECT user_id, ${VERIFIED_EMAIL} FROM ${this.t('user')} WHERE user_id IN (?)`,
         [unknown],
       );
       const profiles = await this.matchProfiles(users);

@@ -12,7 +12,7 @@ Everything runs in one transaction. A failure, or a `--dry-run`, leaves Munda Ma
 | --- | --- |
 | Threads in the forums listed in `mapping.csv` (visible ones that have at least one visible post; redirects are skipped) | `forum_threads` in the mapped category, numbered after the app's own threads in YakTribe's order. `yaktribe.thread_map` keeps the old id, so old thread URLs can redirect |
 | Visible posts, BB code converted to the app's HTML | `forum_posts`, numbered in thread order, with their original dates |
-| Post authors and Like-givers | `forum_imported_authors`, linked to a Munda Manager profile when the email matches a confirmed account |
+| Post authors and Like-givers | `forum_imported_authors`, linked to a Munda Manager profile when the email matches a confirmed account and was confirmed on XenForo too |
 | Likes (reaction 1) | `forum_post_likes` for matched accounts. The rest wait in `yaktribe.pending_likes` until the person claims their YakTribe posts. `like_count` counts both |
 | The forum, its tags and its prefix, through `mapping.csv` | `forum_tags` and `forum_thread_tags` |
 
@@ -95,7 +95,7 @@ npm test            # BB code conversion
 npm run typecheck
 ```
 
-`test/fixtures/xenforo.sql` is a tiny XenForo forum with one of each case the import handles, and `test/fixtures/munda-manager.sql` adds three accounts and one thread of the app's own. Load them into an empty MariaDB database and a Munda Manager database, use the mapping below, and run the import:
+`test/fixtures/xenforo.sql` is a tiny XenForo forum with one of each case the import handles, and `test/fixtures/munda-manager.sql` adds four accounts and one thread of the app's own. Load them into an empty MariaDB database and a Munda Manager database, use the mapping below, and run the import:
 
 ```csv
 source,key,category,tags

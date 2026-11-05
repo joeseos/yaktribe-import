@@ -7,7 +7,8 @@ DROP TABLE IF EXISTS xf_user, xf_node, xf_thread, xf_post, xf_reaction_content, 
 CREATE TABLE xf_user (
   user_id int unsigned PRIMARY KEY,
   username varchar(50) NOT NULL,
-  email varchar(120) NOT NULL DEFAULT ''
+  email varchar(120) NOT NULL DEFAULT '',
+  user_state enum('valid','email_confirm','email_confirm_edit','moderated','email_bounce','rejected','disabled') NOT NULL DEFAULT 'valid'
 ) CHARSET utf8mb4;
 
 CREATE TABLE xf_node (
@@ -77,13 +78,14 @@ CREATE TABLE xf_phrase (
 ) CHARSET utf8mb4;
 
 -- Kal's email matches a confirmed Munda Manager account (in another case), Zed's an unconfirmed one.
--- Mira has an account too but is only mentioned, never posts or likes.
-INSERT INTO xf_user VALUES
-  (1, 'Admin', 'admin@yak.test'),
-  (2, 'Bob', 'bob@yak.test'),
-  (45, 'Kal', 'KAL@Example.com'),
-  (46, 'Zed', 'zed@example.com'),
-  (47, 'Mira', 'mira@example.com');
+-- Mira has an account too but is only mentioned, never posts or likes. Bob's email matches an account,
+-- but he never confirmed it on XenForo, so he must not be linked to it.
+INSERT INTO xf_user (user_id, username, email, user_state) VALUES
+  (1, 'Admin', 'admin@yak.test', 'valid'),
+  (2, 'Bob', 'bob@example.com', 'email_confirm'),
+  (45, 'Kal', 'KAL@Example.com', 'valid'),
+  (46, 'Zed', 'zed@example.com', 'valid'),
+  (47, 'Mira', 'mira@example.com', 'valid');
 
 INSERT INTO xf_node VALUES
   (1, 'Necromunda', 'Category', 0),
