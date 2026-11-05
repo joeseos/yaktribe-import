@@ -2,7 +2,7 @@
 -- with one of each case it has to handle. Load into an empty MariaDB/MySQL database:
 --   mysql xenforo < test/fixtures/xenforo.sql
 
-DROP TABLE IF EXISTS xf_user, xf_node, xf_thread, xf_post, xf_reaction_content, xf_tag, xf_tag_content, xf_thread_prefix, xf_phrase;
+DROP TABLE IF EXISTS xf_user, xf_node, xf_thread, xf_post, xf_reaction_content, xf_tag, xf_tag_content, xf_thread_prefix, xf_phrase, xf_poll, xf_poll_response;
 
 CREATE TABLE xf_user (
   user_id int unsigned PRIMARY KEY,
@@ -69,6 +69,21 @@ CREATE TABLE xf_thread_prefix (
   prefix_group_id int unsigned NOT NULL DEFAULT 0
 ) CHARSET utf8mb4;
 
+CREATE TABLE xf_poll (
+  poll_id int unsigned PRIMARY KEY,
+  content_type varbinary(25) NOT NULL,
+  content_id int unsigned NOT NULL,
+  question varchar(100) NOT NULL,
+  voter_count int unsigned NOT NULL DEFAULT 0
+) CHARSET utf8mb4;
+
+CREATE TABLE xf_poll_response (
+  poll_response_id int unsigned PRIMARY KEY,
+  poll_id int unsigned NOT NULL,
+  response varchar(100) NOT NULL,
+  response_vote_count int unsigned NOT NULL DEFAULT 0
+) CHARSET utf8mb4;
+
 CREATE TABLE xf_phrase (
   phrase_id int unsigned AUTO_INCREMENT PRIMARY KEY,
   language_id int unsigned NOT NULL,
@@ -128,3 +143,7 @@ INSERT INTO xf_thread_prefix VALUES (1, 0), (2, 0);
 INSERT INTO xf_phrase (language_id, title, phrase_text) VALUES
   (0, 'thread_prefix.1', 'Battle Report'),
   (0, 'thread_prefix.2', 'Question');
+
+-- A poll on the campaign thread, kept as text at the end of its opening post
+INSERT INTO xf_poll VALUES (1, 'thread', 8, 'Best <gang>?', 21);
+INSERT INTO xf_poll_response VALUES (1, 1, 'Goliath', 12), (2, 1, 'Escher', 9), (3, 1, 'Cawdor', 1);

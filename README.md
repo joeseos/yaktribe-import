@@ -16,7 +16,7 @@ Everything runs in one transaction. A failure, or a `--dry-run`, leaves Munda Ma
 | Likes (reaction 1) | `forum_post_likes` for matched accounts. The rest wait in `yaktribe.pending_likes` until the person claims their YakTribe posts. `like_count` counts both |
 | The forum, its tags and its prefix, through `mapping.csv` | `forum_tags` and `forum_thread_tags` |
 
-It leaves out edit history, private messages, permissions, other reactions, and attachments, which become *[attachment not migrated]*. https images stay as hotlinked images; http images become links. Links to YakTribe threads and posts that were imported point at their new pages.
+It leaves out edit history, private messages, permissions, other reactions, and attachments, which become *[attachment not migrated]*. https images stay as hotlinked images; http images become links. Links to YakTribe threads and posts that were imported point at their new pages. A thread's poll becomes its final results, as text at the end of the opening post.
 
 ## Mapping
 

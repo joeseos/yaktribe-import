@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
 import type { Client } from 'pg';
-import { collectRefs, parse, render, type Resolver } from './bbcode.ts';
+import { collectRefs, escapeHtml, parse, render, type Resolver } from './bbcode.ts';
 import type { Mapping } from './mapping.ts';
 import { Progress } from './progress.ts';
 import type { Report, StepReport } from './report.ts';
@@ -446,7 +446,10 @@ export class Importer {
     const step = this.report.step('Posts');
     const { rows: [{ count }] } = await this.pg.query<{ count: string }>('SELECT count(*) FROM yaktribe.post_map');
     const progress = new Progress('Posts', Number(count));
+    let pollCount = 0;
     for (const threadIds of this.threadChunks()) {
+      const polls = await this.pollsFor(threadIds);
+      pollCount += polls.size;
       for (let lastId = 0; ; ) {
         const posts = await this.xfRows<{
           post_id: number; thread_id: number; user_id: number; username: string; post_date: number; message: string; last_edit_date: number;
@@ -472,6 +475,7 @@ export class Importer {
           const author = post.user_id > 0 ? this.authors.get(post.user_id) : undefined;
           const importedAuthorId = author?.id ?? (await this.guestAuthor(post.username));
           let content = render(parsed[i], resolver, this.report.conversion);
+          if (target.post_number === 1) content += polls.get(post.thread_id) ?? '';
           if (content.length > MAX_CONTENT) {
             this.report.truncatedPosts.push(post.post_id);
             content = truncated(post.message);
@@ -492,6 +496,30 @@ export class Importer {
       }
     }
     progress.finish();
+    if (pollCount) this.report.notes.push(`Polls kept as text at the end of their thread's opening post: ${pollCount.toLocaleString('en-US')}.`);
+  }
+
+  /** Munda Manager has no polls, so each thread's poll becomes its final results, as HTML for the opening post. */
+  private async pollsFor(threadIds: number[]): Promise<Map<number, string>> {
+    const rows = await this.xfRows<{ thread_id: number; question: string; voter_count: number; response: string; votes: number }>(
+      `SELECT p.content_id AS thread_id, p.question, p.voter_count, r.response, r.response_vote_count AS votes
+       FROM ${this.t('poll')} p JOIN ${this.t('poll_response')} r ON r.poll_id = p.poll_id
+       WHERE p.content_type = 'thread' AND p.content_id IN (?) ORDER BY p.content_id, r.poll_response_id`,
+      [threadIds],
+    );
+    const count = (n: number, word: string) => `${n.toLocaleString('en-US')} ${word}${n === 1 ? '' : 's'}`;
+    const polls = new Map<number, { question: string; voters: number; items: string[] }>();
+    for (const row of rows) {
+      const poll = polls.get(row.thread_id) ?? { question: row.question, voters: row.voter_count, items: [] };
+      poll.items.push(`<li><p>${escapeHtml(row.response)}: ${count(row.votes, 'vote')}</p></li>`);
+      polls.set(row.thread_id, poll);
+    }
+    return new Map(
+      [...polls].map(([threadId, poll]) => [
+        threadId,
+        `<p><strong>Poll: ${escapeHtml(poll.question)}</strong></p><ul>${poll.items.join('')}</ul><p>${count(poll.voters, 'voter')}</p>`,
+      ]),
+    );
   }
 
   private async importLikes() {
@@ -652,10 +680,9 @@ export class Importer {
 function truncated(message: string): string {
   const note = '<p><em>[This post was cut short in the move from YakTribe.]</em></p>';
   const text = message.replace(/\[\/?[a-z*]+(?:=[^\]]*|\s[^\]]*)?\]/gi, '');
-  const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   let html = '';
   for (const paragraph of text.replace(/\r\n?/g, '\n').split(/\n\s*\n+/)) {
-    const body = escape(paragraph.trim()).replace(/\n/g, '<br>');
+    const body = escapeHtml(paragraph.trim()).replace(/\n/g, '<br>');
     const room = MAX_CONTENT - html.length - note.length - '<p></p>'.length;
     if (body.length <= room) {
       html += `<p>${body}</p>`;
