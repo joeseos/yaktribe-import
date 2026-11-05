@@ -474,12 +474,13 @@ export class Importer {
           const target = numbers.get(post.post_id)!;
           const author = post.user_id > 0 ? this.authors.get(post.user_id) : undefined;
           const importedAuthorId = author?.id ?? (await this.guestAuthor(post.username));
+          const poll = target.post_number === 1 ? (polls.get(post.thread_id) ?? '') : '';
           let content = render(parsed[i], resolver, this.report.conversion);
-          if (target.post_number === 1) content += polls.get(post.thread_id) ?? '';
-          if (content.length > MAX_CONTENT) {
+          if (content.length + poll.length > MAX_CONTENT) {
             this.report.truncatedPosts.push(post.post_id);
-            content = truncated(post.message);
+            content = truncated(post.message, MAX_CONTENT - poll.length);
           }
+          content += poll;
           rows.push([
             target.post_id, this.threads.get(post.thread_id)!.id, target.post_number, author?.profileId ?? null, importedAuthorId,
             content, fromUnix(post.post_date), post.last_edit_date > 0 ? fromUnix(post.last_edit_date) : null,
@@ -676,14 +677,14 @@ export class Importer {
   }
 }
 
-/** A post too long once converted: its text without BB code, cut to fit. */
-function truncated(message: string): string {
+/** A post too long once converted: its text without BB code, cut to fit in `limit` characters. */
+function truncated(message: string, limit: number): string {
   const note = '<p><em>[This post was cut short in the move from YakTribe.]</em></p>';
   const text = message.replace(/\[\/?[a-z*]+(?:=[^\]]*|\s[^\]]*)?\]/gi, '');
   let html = '';
   for (const paragraph of text.replace(/\r\n?/g, '\n').split(/\n\s*\n+/)) {
     const body = escapeHtml(paragraph.trim()).replace(/\n/g, '<br>');
-    const room = MAX_CONTENT - html.length - note.length - '<p></p>'.length;
+    const room = limit - html.length - note.length - '<p></p>'.length;
     if (body.length <= room) {
       html += `<p>${body}</p>`;
       continue;
