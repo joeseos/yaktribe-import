@@ -198,7 +198,7 @@ export class Importer {
     );
     for (const row of rows) this.categoryIds.set(row.slug, row.id);
     for (const slug of slugs.filter((slug) => !this.categoryIds.has(slug))) {
-      const name = slug.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase());
+      const name = this.mapping.categoryNames.get(slug) ?? slug.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase());
       const { rows: created } = await this.pg.query<{ id: string }>(
         `INSERT INTO forum_categories (slug, name, position)
          VALUES ($1, $2, (SELECT coalesce(max(position), 0) + 1 FROM forum_categories)) RETURNING id`,

@@ -1,5 +1,6 @@
-source,key,category,tags
+source,key,category,tags,category_name
 forum,2,n26-rules-gang-discussion,Necromunda
 forum,3,battle-reports,
+forum,4,rules-mechanics,,Rules & Mechanics
 tag,campaign,,Campaigns
 prefix,1,,Battle Report

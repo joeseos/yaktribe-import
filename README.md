@@ -23,13 +23,14 @@ It leaves out edit history, private messages, permissions, other reactions, and 
 Copy `mapping.example.csv` to `mapping.csv`. Only forums listed there are imported, and only tags and prefixes listed there become tags.
 
 ```csv
-source,key,category,tags
+source,key,category,tags,category_name
 forum,2,n26-rules-gang-discussion,Necromunda
+forum,3,rules-mechanics,,Rules & Mechanics
 tag,campaign,,Campaigns
 prefix,1,,Battle Report
 ```
 
-- `forum`: a XenForo `node_id`, the Munda Manager category slug its threads go into, and optional tags. Separate several tags with `;`. A category that doesn't exist yet is created, and the report says so.
+- `forum`: a XenForo `node_id`, the Munda Manager category slug its threads go into, and optional tags. Separate several tags with `;`. A category that doesn't exist yet is created with `category_name`, or a name made from the slug, and the report says so.
 - `tag`: a XenForo tag, and the tags it becomes.
 - `prefix`: a XenForo `prefix_id`, and the tags it becomes.
 
@@ -98,8 +99,8 @@ npm run typecheck
 `test/fixtures/xenforo.sql` is a tiny XenForo forum with one of each case the import handles, and `test/fixtures/munda-manager.sql` adds three accounts and one thread of the app's own. Load them into an empty MariaDB database and a Munda Manager database, use the mapping below, and run the import:
 
 ```csv
-source,key,category,tags
-forum,2,gang-discussion,Necromunda
+source,key,category,tags,category_name
+forum,2,gang-discussion,Necromunda,Gangs & Loadouts
 forum,3,battle-reports,Necromunda;Battle Report
 tag,campaign,,Campaigns
 tag,scenery,,Terrain;Scenery
