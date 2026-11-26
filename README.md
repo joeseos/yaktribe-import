@@ -97,7 +97,13 @@ The image files aren't in the database dump, so the import doesn't copy them. It
 | `external_url` | Set when a XenForo add-on stored the file somewhere else |
 | `file_size`, `filename` | As uploaded |
 
-Copy each file to its `name`, converted to WebP, then set `IMAGE_BASE_URL` in `.env` to the bucket's public URL (for example `https://images.example.com`) and run the import. Without it, posts show *[image]* where the images go. Image attachments that a post doesn't place in its text are added below it, as XenForo shows them.
+`npm run images -- reports/images-<time>.csv` downloads every file from YakTribe (3 at a time, `--concurrency` to change), converts it to WebP (at most 2560 px on the longest side) and saves it as `images/<name>`. Files already there are skipped, so a stopped run can be started again; failures are listed in `images/failed.csv`. Then copy the `images` folder to the bucket, for example with rclone over Supabase Storage's S3 access keys:
+
+```sh
+rclone copy images supabase:users-images/forum/yaktribe --header-upload "Cache-Control: max-age=31536000" --exclude failed.csv
+```
+
+Once the files are in place, set `IMAGE_BASE_URL` in `.env` to the bucket's public URL (for example `https://<project>.supabase.co/storage/v1/object/public/users-images/forum/yaktribe`) and run the import. Without it, posts show *[image]* where the images go. Image attachments that a post doesn't place in its text are added below it, as XenForo shows them.
 
 ## Before a production import
 
