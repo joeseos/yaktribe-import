@@ -1,0 +1,83 @@
+source,key,category,tags,category_name
+# YakTribe forum structure, decided 2026-11-25. Copy to mapping.csv to use it.
+# Left out: Vault Discussion (74), Fiction (38), TribeMeet Discussion (76), YakTribe Development (49),
+# LGT Arbitrator Discussion (53), YakTribe Adeptus (28), The Yaks (42).
+
+# Tribe News into the existing Announcements category
+forum,23,announcements,
+forum,1,musings-of-the-yak,,Musings Of The Yak
+forum,4,yak-mechanicum,,Yak Mechanicum
+forum,59,tribemeet-and-other-events,,TribeMeet and other Events
+# Campaigns and Tournaments, merged into TribeMeet and other Events
+forum,77,tribemeet-and-other-events,
+# Into the existing Munda Manager category
+forum,9,miniatures-terrain,
+forum,12,the-trading-post,,The Trading Post
+forum,83,rules-mechanics,,Rules & Mechanics
+forum,82,gangs-loadouts,,Gangs & Loadouts
+forum,86,scenarios-tactics,,Scenarios & Tactics
+forum,84,hive-lore,,Hive Lore
+
+# Game forums merged into one category; each thread is tagged with its old forum's name
+forum,75,other-tabletop-wargaming-games,Kill Team,Other Tabletop & Wargaming games
+forum,36,other-tabletop-wargaming-games,GorkaMorka
+forum,37,other-tabletop-wargaming-games,Mordheim
+forum,67,other-tabletop-wargaming-games,Blood Bowl
+forum,57,other-tabletop-wargaming-games,Battlefleet Gothic
+forum,79,other-tabletop-wargaming-games,"Warhammer 40,000"
+forum,80,other-tabletop-wargaming-games,Warhammer Fantasy
+forum,72,other-tabletop-wargaming-games,Epic
+forum,71,other-tabletop-wargaming-games,Shadespire
+forum,70,other-tabletop-wargaming-games,WarHammer Quest
+forum,51,other-tabletop-wargaming-games,Shadow War: Armageddon
+forum,58,other-tabletop-wargaming-games,Tabletop Games
+forum,81,other-tabletop-wargaming-games,Mantic Games
+forum,85,other-tabletop-wargaming-games,Inquisimunda
+forum,87,other-tabletop-wargaming-games,Yak Community Edition
+
+# Prefixes (Necromunda, Bug, Suggestion, Competition and Update are left out)
+prefix,16,,N18
+prefix,7,,N17
+prefix,3,,NCE
+prefix,1,,Classic Necromunda
+prefix,2,,Classic Necromunda
+prefix,14,,Inquisimunda
+prefix,15,,Rules question
+prefix,5,,GorkaMorka
+prefix,6,,Mordheim
+prefix,20,,Battlefleet Gothic
+prefix,22,,Shadow War: Armageddon
+prefix,21,,Kill Team
+prefix,18,,"Warhammer 40,000"
+prefix,19,,Age of Sigmar
+prefix,23,,WarHammer Quest
+
+# XenForo tags onto the app's existing tags, plus the game and edition tags above
+tag,escher,,Escher
+tag,esher,,Escher
+tag,cawdor,,Cawdor
+tag,cawdor gang,,Cawdor
+tag,cawdor conversion,,Cawdor;Conversion
+tag,goliath,,Goliath
+tag,delaque,,Delaque
+tag,orlock,,Orlock
+tag,van saar,,Van Saar
+tag,enforcers,,Palanite Enforcers
+tag,palanite enforcers,,Palanite Enforcers
+tag,venator,,Venators
+tag,terrain,,Terrain
+tag,scenery,,Terrain
+tag,scratch building,,Terrain
+tag,painting,,Painting
+tag,painted,,Painting
+tag,kitbash,,Conversion
+tag,kit bash,,Conversion
+tag,conversion,,Conversion
+tag,campaign,,Campaign
+tag,zone mortalis,,Zone Mortalis
+tag,n17,,N17
+tag,necromunda 2017,,N17
+tag,nce,,NCE
+tag,mordheim,,Mordheim
+tag,gorkamorka,,GorkaMorka
+tag,shadow war: armageddon,,Shadow War: Armageddon

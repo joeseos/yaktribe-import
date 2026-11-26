@@ -20,7 +20,7 @@ It leaves out edit history, private messages, permissions, other reactions, and 
 
 ## Mapping
 
-Copy `mapping.example.csv` to `mapping.csv`. Only forums listed there are imported, and only tags and prefixes listed there become tags.
+Copy `mapping.example.csv` to `mapping.csv`, or `mapping.yaktribe.csv` for the agreed YakTribe structure. Only forums listed there are imported, and only tags and prefixes listed there become tags.
 
 ```csv
 source,key,category,tags,category_name
@@ -62,7 +62,7 @@ The server doesn't need Node installed. A throwaway Node container runs it:
 ```sh
 git clone https://github.com/joeseos/yaktribe-import.git && cd yaktribe-import
 cp .env.example .env              # then fill in both database URLs
-cp mapping.example.csv mapping.csv
+cp mapping.yaktribe.csv mapping.csv
 tmux new -s import                # keeps the import running if SSH drops; reattach with: tmux attach -t import
 docker run --rm -it --network host -v "$PWD":/app -w /app node:22 \
   sh -c "npm ci && npm run import -- --dry-run"
