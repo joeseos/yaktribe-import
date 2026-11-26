@@ -11,7 +11,7 @@ forum,59,tribemeet-and-other-events,,TribeMeet and other Events
 # Campaigns and Tournaments, merged into TribeMeet and other Events
 forum,77,tribemeet-and-other-events,
 # Into the existing Munda Manager category
-forum,9,miniatures-terrain,
+forum,9,miniatures-terrain,,Miniatures & Terrain
 forum,12,the-trading-post,,The Trading Post
 forum,83,rules-mechanics,,Rules & Mechanics
 forum,82,gangs-loadouts,,Gangs & Loadouts
@@ -35,7 +35,7 @@ forum,81,other-tabletop-wargaming-games,Mantic Games
 forum,85,other-tabletop-wargaming-games,Inquisimunda
 forum,87,other-tabletop-wargaming-games,Yak Community Edition
 
-# Prefixes (Necromunda, Bug, Suggestion, Competition and Update are left out)
+# Prefixes (Necromunda, Bug, Suggestion and Update are left out)
 prefix,16,,N23
 prefix,7,,N23
 prefix,3,,NCE
@@ -51,6 +51,7 @@ prefix,21,,Kill Team
 prefix,18,,"Warhammer 40,000"
 prefix,19,,Age of Sigmar
 prefix,23,,WarHammer Quest
+prefix,11,,Competition
 
 # XenForo tags onto the app's existing tags, plus the game and edition tags above
 tag,escher,,Escher
@@ -82,3 +83,14 @@ tag,nce,,NCE
 tag,mordheim,,Mordheim
 tag,gorkamorka,,GorkaMorka
 tag,shadow war: armageddon,,Shadow War: Armageddon
+tag,rules,,Rules question
+tag,rule question,,Rules question
+tag,inquisimunda,,Inquisimunda
+tag,conversions,,Conversion
+tag,competition,,Competition
+tag,homebrew,,House rules
+tag,house rules,,House rules
+tag,genestealer cult,,Genestealer Cult
+tag,new player,,New player
+tag,ash wastes,,Ash Wastes
+tag,scavvies,,Scavvies
