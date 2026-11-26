@@ -2,10 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
 import type { Client } from 'pg';
-import { collectRefs, escapeHtml, parse, render, type Resolver } from './bbcode.ts';
+import { collectRefs, emptyRefs, escapeHtml, imageHtml, parse, render, type Image, type Resolver } from './bbcode.ts';
 import type { Mapping } from './mapping.ts';
 import { Progress } from './progress.ts';
-import type { Report, StepReport } from './report.ts';
+import type { ImageFile, Report, StepReport } from './report.ts';
 
 export interface ImportOptions {
   /** XenForo's table prefix, xf_ unless the install changed it */
@@ -14,6 +14,8 @@ export interface ImportOptions {
   batchSize: number;
   /** Import only the first N threads, for quick test runs */
   limitThreads: number | null;
+  /** Public URL of the bucket the images are copied to; null shows a placeholder instead */
+  imageBaseUrl: string | null;
 }
 
 // Munda Manager's own limits, from the forum migrations
@@ -37,6 +39,27 @@ interface ThreadInfo {
 interface Author {
   id: string;
   profileId: string | null;
+}
+
+// xf_attachment_data columns for the image manifest
+const IMAGE_COLUMNS = 'a.attachment_id, d.data_id, d.filename, d.file_size, d.file_hash, d.file_path, d.xfa_url';
+interface ImageRow {
+  attachment_id: number;
+  data_id: number;
+  filename: string;
+  file_size: number;
+  file_hash: string;
+  file_path: string;
+  xfa_url: string;
+}
+
+/** Where XenForo keeps the full-size file, relative to its install folder (XenForo's default unless file_path says otherwise). */
+export function attachmentFilePath(row: Pick<ImageRow, 'data_id' | 'file_hash' | 'file_path'>): string {
+  const placeholders: Record<string, string> = {
+    '%INTERNAL%': 'internal_data', '%DATA%': 'data', '%DATA_ID%': String(row.data_id),
+    '%FLOOR%': String(Math.floor(row.data_id / 1000)), '%HASH%': row.file_hash,
+  };
+  return (row.file_path || '%INTERNAL%/attachments/%FLOOR%/%DATA_ID%-%HASH%.data').replace(/%[A-Z_]+%/g, (key) => placeholders[key] ?? key);
 }
 
 /** Same as slugifyHeading in Munda Manager, which builds forum thread URLs. */
@@ -106,6 +129,8 @@ export class Importer {
   private readonly guests = new Map<string, string>();
   /** Profiles of mentioned users who neither posted nor liked in the imported threads */
   private readonly mentioned = new Map<number, string | null>();
+  /** The image manifest: every attachment and gallery image the imported posts show, by attachment id */
+  readonly images = new Map<number, ImageFile>();
 
   constructor(xf: Connection, pg: Client, mapping: Mapping, report: Report, options: ImportOptions) {
     this.xf = xf;
@@ -413,9 +438,54 @@ export class Importer {
     return id;
   }
 
-  private async resolverFor(messages: ReturnType<typeof parse>[]): Promise<Resolver> {
-    const refs = { postIds: new Set<number>(), threadIds: new Set<number>(), userIds: new Set<number>() };
-    for (const nodes of messages) collectRefs(nodes, refs);
+  /** An image for the bucket: listed in the manifest, shown from `<imageBaseUrl>/attachments/<attachment id>.webp`. */
+  private image(row: ImageRow, sourceUrl: string): Image {
+    const name = `attachments/${row.attachment_id}.webp`;
+    if (!this.images.has(row.attachment_id)) {
+      this.images.set(row.attachment_id, {
+        name, sourceUrl, filePath: attachmentFilePath(row), externalUrl: row.xfa_url, fileSize: row.file_size, filename: row.filename,
+      });
+    }
+    return { src: this.options.imageBaseUrl ? `${this.options.imageBaseUrl}/${name}` : null };
+  }
+
+  /** Images attached to imported posts (shown inline or below the post) and the public gallery images posts embed. */
+  private async imagesFor(postIds: number[], attachmentIds: number[], mediaIds: number[]) {
+    const attachments = await this.xfRows<ImageRow & { post_id: number; thread_id: number }>(
+      `SELECT ${IMAGE_COLUMNS}, a.content_id AS post_id, p.thread_id FROM ${this.t('attachment')} a
+       JOIN ${this.t('attachment_data')} d ON d.data_id = a.data_id
+       JOIN ${this.t('post')} p ON p.post_id = a.content_id AND p.message_state = 'visible'
+       WHERE a.content_type = 'post' AND d.width > 0 AND (a.content_id IN (?) OR a.attachment_id IN (?))
+       ORDER BY a.attach_date, a.attachment_id`,
+      [postIds, attachmentIds.length ? attachmentIds : [0]],
+    );
+    // An image from a post that isn't imported (a private forum, say) stays out, even when quoted
+    const imported = attachments.filter((row) => this.threads.has(row.thread_id));
+    const media = mediaIds.length
+      ? await this.xfRows<ImageRow & { media_id: number }>(
+        `SELECT ${IMAGE_COLUMNS}, m.media_id FROM ${this.t('mg_media_item')} m
+         JOIN ${this.t('attachment')} a ON a.content_type = 'xfmg_media' AND a.content_id = m.media_id
+         JOIN ${this.t('attachment_data')} d ON d.data_id = a.data_id
+         LEFT JOIN ${this.t('mg_album')} al ON al.album_id = m.album_id
+         WHERE m.media_id IN (?) AND m.media_state = 'visible' AND m.media_type = 'image' AND d.width > 0
+           AND (m.album_id = 0 OR (al.album_state = 'visible' AND al.view_privacy IN ('public', 'inherit')))
+         ORDER BY a.attachment_id`,
+        [mediaIds],
+      )
+      : [];
+    const byPost = new Map<number, number[]>();
+    for (const row of imported) byPost.set(row.post_id, [...(byPost.get(row.post_id) ?? []), row.attachment_id]);
+    // An item's file is its first attachment
+    const byMedia = new Map<number, ImageRow>();
+    for (const row of media) if (!byMedia.has(row.media_id)) byMedia.set(row.media_id, row);
+    return { attachments: new Map(imported.map((row) => [row.attachment_id, row])), media: byMedia, byPost };
+  }
+
+  private async resolverFor(refsByPost: ReturnType<typeof emptyRefs>[], postIds: number[]) {
+    const refs = emptyRefs();
+    for (const postRefs of refsByPost) {
+      for (const key of Object.keys(refs) as (keyof typeof refs)[]) for (const id of postRefs[key]) refs[key].add(id);
+    }
     const { rows: posts } = await this.pg.query<{ xf_post_id: number; path: string; post_number: number }>(
       `SELECT pm.xf_post_id, tm.path, pm.post_number FROM yaktribe.post_map pm
        JOIN yaktribe.thread_map tm ON tm.xf_thread_id = pm.xf_thread_id WHERE pm.xf_post_id = ANY($1)`,
@@ -432,14 +502,24 @@ export class Importer {
       const profiles = await this.matchProfiles(users);
       for (const id of unknown) this.mentioned.set(id, profiles.get(id) ?? null);
     }
-    return {
+    const images = await this.imagesFor(postIds, [...refs.attachmentIds], [...refs.mediaIds]);
+    const resolver: Resolver = {
       postHref: (id) => postHrefs.get(id) ?? null,
       threadHref: (id) => this.threads.get(id)?.path ?? null,
       mention: (id) => {
         const profileId = this.authors.has(id) ? this.authors.get(id)!.profileId : this.mentioned.get(id);
         return profileId ? { profileId } : null;
       },
+      attachment: (id) => {
+        const row = images.attachments.get(id);
+        return row ? this.image(row, `https://yaktribe.games/community/attachments/${id}/`) : null;
+      },
+      galleryMedia: (id) => {
+        const row = images.media.get(id);
+        return row ? this.image(row, `https://yaktribe.games/community/media/${id}/full`) : null;
+      },
     };
+    return { resolver, attachmentsByPost: images.byPost };
   }
 
   private async importPosts() {
@@ -468,7 +548,8 @@ export class Importer {
         const numbers = new Map(mapped.map((row) => [row.xf_post_id, row]));
 
         const parsed = posts.map((post) => parse(post.message, this.report.conversion));
-        const resolver = await this.resolverFor(parsed);
+        const refs = parsed.map((nodes) => collectRefs(nodes));
+        const { resolver, attachmentsByPost } = await this.resolverFor(refs, posts.map((post) => post.post_id));
         const rows: unknown[][] = [];
         for (const [i, post] of posts.entries()) {
           const target = numbers.get(post.post_id)!;
@@ -476,6 +557,12 @@ export class Importer {
           const importedAuthorId = author?.id ?? (await this.guestAuthor(post.username));
           const poll = target.post_number === 1 ? (polls.get(post.thread_id) ?? '') : '';
           let content = render(parsed[i], resolver, this.report.conversion);
+          // Images attached but not placed in the text, which XenForo shows below the post
+          for (const attachmentId of attachmentsByPost.get(post.post_id) ?? []) {
+            if (refs[i].attachmentIds.has(attachmentId)) continue;
+            content += `<p>${imageHtml(resolver.attachment(attachmentId)!)}</p>`;
+            this.report.conversion.imagesLinked++;
+          }
           if (content.length + poll.length > MAX_CONTENT) {
             this.report.truncatedPosts.push(post.post_id);
             content = truncated(post.message, MAX_CONTENT - poll.length);
@@ -498,6 +585,11 @@ export class Importer {
     }
     progress.finish();
     if (pollCount) this.report.notes.push(`Polls kept as text at the end of their thread's opening post: ${pollCount.toLocaleString('en-US')}.`);
+    const megabytes = [...this.images.values()].reduce((sum, image) => sum + Number(image.fileSize), 0) / 1024 ** 2;
+    this.report.notes.push(
+      `Images for the bucket: ${this.images.size.toLocaleString('en-US')} files, ${Math.round(megabytes).toLocaleString('en-US')} MB before WebP (listed in the images CSV).`
+      + (this.options.imageBaseUrl ? '' : ' IMAGE_BASE_URL is not set, so posts show [image] where they will be.'),
+    );
   }
 
   /** Munda Manager has no polls, so each thread's poll becomes its final results, as HTML for the opening post. */

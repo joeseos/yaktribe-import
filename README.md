@@ -15,8 +15,9 @@ Everything runs in one transaction. A failure, or a `--dry-run`, leaves Munda Ma
 | Post authors and Like-givers | `forum_imported_authors`, linked to a Munda Manager profile when the email matches a confirmed account |
 | Likes (reaction 1) | `forum_post_likes` for matched accounts. The rest wait in `yaktribe.pending_likes` until the person claims their YakTribe posts. `like_count` counts both |
 | The forum, its tags and its prefix, through `mapping.csv` | `forum_tags` and `forum_thread_tags` |
+| Image attachments of imported posts, and public gallery images the posts embed with `[GALLERY]` | Images from the image bucket, plus a list of the files to copy there (see [Images](#images)) |
 
-It leaves out edit history, private messages, permissions, other reactions, and attachments, which become *[attachment not migrated]*. https images stay as hotlinked images; http images become links. Links to YakTribe threads and posts that were imported point at their new pages. A thread's poll becomes its final results, as text at the end of the opening post.
+It leaves out edit history, private messages, permissions, other reactions, and file attachments, which become *[attachment not migrated]*. Gallery albums and private or members-only gallery items become *[gallery item not migrated]*. https images stay as hotlinked images; http images become links. Links to YakTribe threads and posts that were imported point at their new pages. A thread's poll becomes its final results, as text at the end of the opening post.
 
 ## Mapping
 
@@ -83,6 +84,20 @@ scp root@<vps>:yaktribe-import/reports/import-*.html .
 3. Do the real import into the test Supabase and check the forum in the test app.
 
 Never point a test run at production. For the production import, it's the same command with `MM_DATABASE_URL` set to production's direct Postgres connection.
+
+## Images
+
+The image files aren't in the database dump, so the import doesn't copy them. It writes `reports/images-<time>.csv`, which lists every image the imported posts show, and the posts point at that file's place in the bucket:
+
+| Column | |
+| --- | --- |
+| `name` | Path in the bucket, `attachments/<attachment id>.webp`, for post images and gallery items alike |
+| `source_url` | The full-size image on YakTribe |
+| `file_path` | The same file on YakTribe's server, relative to the XenForo folder |
+| `external_url` | Set when a XenForo add-on stored the file somewhere else |
+| `file_size`, `filename` | As uploaded |
+
+Copy each file to its `name`, converted to WebP, then set `IMAGE_BASE_URL` in `.env` to the bucket's public URL (for example `https://images.example.com`) and run the import. Without it, posts show *[image]* where the images go. Image attachments that a post doesn't place in its text are added below it, as XenForo shows them.
 
 ## Before a production import
 
