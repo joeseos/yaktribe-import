@@ -88,7 +88,7 @@ ${this.steps.map((s) => `<tr><td>${esc(s.name)}</td><td class="n">${fmt(s.read)}
 <table>
 <tr><td>Unknown tags (kept as text)</td><td>${counts(this.conversion.unknownTags)}</td></tr>
 <tr><td>Converted with formatting lost</td><td>${counts(this.conversion.lossyTags)}</td></tr>
-<tr><td>Images shown from the bucket</td><td>${fmt(this.conversion.imagesLinked)}</td></tr>
+<tr><td>Attachment and gallery images (from the bucket, or [image] until IMAGE_BASE_URL is set)</td><td>${fmt(this.conversion.imagesLinked)}</td></tr>
 <tr><td>Attachments not migrated (files, or images from posts that aren't imported)</td><td>${fmt(this.conversion.attachmentsDropped)}</td></tr>
 <tr><td>Gallery embeds not migrated (albums, private or members-only)</td><td>${fmt(this.conversion.galleryDropped)}</td></tr>
 <tr><td>http:// images turned into links</td><td>${fmt(this.conversion.httpImagesLinked)}</td></tr>

@@ -456,7 +456,7 @@ export class Importer {
        JOIN ${this.t('attachment_data')} d ON d.data_id = a.data_id
        JOIN ${this.t('post')} p ON p.post_id = a.content_id AND p.message_state = 'visible'
        WHERE a.content_type = 'post' AND d.width > 0 AND (a.content_id IN (?) OR a.attachment_id IN (?))
-       ORDER BY a.attachment_id`,
+       ORDER BY a.attach_date, a.attachment_id`,
       [postIds, attachmentIds.length ? attachmentIds : [0]],
     );
     // An image from a post that isn't imported (a private forum, say) stays out, even when quoted

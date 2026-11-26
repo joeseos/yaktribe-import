@@ -96,7 +96,8 @@ CREATE TABLE xf_attachment (
   attachment_id int unsigned PRIMARY KEY,
   data_id int unsigned NOT NULL,
   content_type varbinary(25) NOT NULL,
-  content_id int unsigned NOT NULL
+  content_id int unsigned NOT NULL,
+  attach_date int unsigned NOT NULL DEFAULT 0
 ) CHARSET utf8mb4;
 
 CREATE TABLE xf_attachment_data (
@@ -183,7 +184,8 @@ INSERT INTO xf_poll_response VALUES (1, 1, 'Goliath', 12), (2, 1, 'Escher', 9), 
 
 -- Attachment 5 is placed in post 11; 6 is attached to post 10 but not placed, so it goes below the post; 7 isn't an image;
 -- 8 belongs to a post that isn't imported. Gallery item 12 is public, 13 is in a private album.
-INSERT INTO xf_attachment VALUES (5, 1, 'post', 11), (6, 2, 'post', 10), (7, 3, 'post', 10), (8, 4, 'post', 50), (9, 5, 'xfmg_media', 12), (10, 6, 'xfmg_media', 13);
+INSERT INTO xf_attachment (attachment_id, data_id, content_type, content_id) VALUES
+  (5, 1, 'post', 11), (6, 2, 'post', 10), (7, 3, 'post', 10), (8, 4, 'post', 50), (9, 5, 'xfmg_media', 12), (10, 6, 'xfmg_media', 13);
 INSERT INTO xf_attachment_data (data_id, filename, file_size, file_hash, width) VALUES
   (1, 'charge.jpg', 1000, 'aaa', 800), (2, 'aftermath.png', 2000, 'bbb', 600), (3, 'rules.pdf', 3000, 'ccc', 0),
   (4, 'private.jpg', 4000, 'ddd', 800), (5, 'goliath.jpg', 5000, 'eee', 1024), (6, 'secret.jpg', 6000, 'fff', 1024);
