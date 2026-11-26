@@ -7,6 +7,8 @@ const resolver: Resolver = {
   postHref: (id) => (id === 10 ? '/forum/battle-reports/7-first-blood#post-3' : null),
   threadHref: (id) => (id === 7 ? '/forum/battle-reports/7-first-blood' : null),
   mention: (id) => (id === 45 ? { profileId: PROFILE } : null),
+  attachment: (id) => (id === 5 ? { src: 'https://img.test/attachments/5.webp' } : id === 6 ? { src: null } : null),
+  galleryMedia: (id) => (id === 12 ? { src: 'https://img.test/attachments/80.webp' } : null),
 };
 const html = (message: string, stats = emptyStats()) => bbcodeToHtml(message, resolver, stats);
 
@@ -53,10 +55,23 @@ test('images: https kept, http becomes a link', () => {
   assert.equal(stats.httpImagesLinked, 1);
 });
 
-test('attachments are dropped and counted', () => {
+test('image attachments show from the bucket, other attachments are dropped', () => {
   const stats = emptyStats();
+  assert.equal(html('[ATTACH type="full" alt="Goliath"]5[/ATTACH]', stats), '<p><img src="https://img.test/attachments/5.webp" alt="Goliath"></p>');
+  assert.equal(html('[ATTACH]6[/ATTACH]', stats), '<p><em>[image]</em></p>');
   assert.equal(html('[ATTACH type="full" alt="x"]123[/ATTACH]', stats), '<p><em>[attachment not migrated]</em></p>');
+  assert.equal(stats.imagesLinked, 2);
   assert.equal(stats.attachmentsDropped, 1);
+});
+
+test('public gallery images show from the bucket, albums and other items are dropped', () => {
+  const stats = emptyStats();
+  assert.equal(html('[GALLERY=media, 12][/GALLERY]', stats), '<p><img src="https://img.test/attachments/80.webp" alt=""></p>');
+  assert.equal(html('[GALLERY=media, 13][/GALLERY]', stats), '<p><em>[gallery item not migrated]</em></p>');
+  assert.equal(html('[GALLERY=album, 12][/GALLERY]', stats), '<p><em>[gallery item not migrated]</em></p>');
+  assert.equal(stats.imagesLinked, 1);
+  assert.equal(stats.galleryDropped, 2);
+  assert.deepEqual(stats.unknownTags, {});
 });
 
 test('mentions link to a claimed profile, else bold text', () => {
@@ -88,6 +103,8 @@ test('unknown and unbalanced tags stay as text', () => {
   const stats = emptyStats();
   assert.equal(html('[foo]x[/foo] [/b] [b]open', stats), '<p>[foo]x[/foo] [/b] <strong>open</strong></p>');
   assert.equal(stats.unknownTags.foo, 1);
+  html('[constructor] [constructor]', stats);
+  assert.equal(stats.unknownTags.constructor, 2);
 });
 
 test('an unclosed raw tag stays as text', () => {
@@ -95,10 +112,12 @@ test('an unclosed raw tag stays as text', () => {
   assert.equal(html('İ [ICODE]x[/icode] y'), '<p>İ <code>x</code> y</p>');
 });
 
-test('collectRefs finds quoted posts, mentions and YakTribe links', () => {
+test('collectRefs finds quoted posts, mentions, YakTribe links and images', () => {
   const refs = collectRefs(
-    parse('[quote="A, post: 10"]x[/quote][user=45]@K[/user] https://yaktribe.games/community/posts/99/ [url=https://yaktribe.games/community/threads/x.7/]t[/url]', emptyStats()),
+    parse('[quote="A, post: 10"]x[/quote][user=45]@K[/user] https://yaktribe.games/community/posts/99/ [url=https://yaktribe.games/community/threads/x.7/]t[/url] [ATTACH]5[/ATTACH] [GALLERY=media, 12][/GALLERY] [GALLERY=album, 3][/GALLERY]', emptyStats()),
   );
+  assert.deepEqual([...refs.attachmentIds], [5]);
+  assert.deepEqual([...refs.mediaIds], [12]);
   assert.deepEqual([...refs.postIds].sort(), [10, 99]);
   assert.deepEqual([...refs.threadIds], [7]);
   assert.deepEqual([...refs.userIds], [45]);

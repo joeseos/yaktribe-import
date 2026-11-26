@@ -16,7 +16,8 @@ Settings come from the environment or .env:
   MM_DATABASE_URL    postgresql://postgres:password@host:5432/postgres
   XF_TABLE_PREFIX    default xf_
   MAPPING            default mapping.csv
-  REPORT_DIR         default reports`;
+  REPORT_DIR         default reports
+  IMAGE_BASE_URL     public URL of the image bucket; unset, posts show [image] placeholders`;
 
 function positive(name: string, value: string | undefined): number | null {
   if (value === undefined) return null;
@@ -49,6 +50,7 @@ async function main() {
     prefix: process.env.XF_TABLE_PREFIX || 'xf_',
     batchSize: positive('batch-size', values['batch-size']) ?? 500,
     limitThreads: positive('limit-threads', values['limit-threads']),
+    imageBaseUrl: process.env.IMAGE_BASE_URL?.replace(/\/+$/, '') || null,
   };
   const report = new Report();
   report.dryRun = values['dry-run'];
@@ -56,10 +58,12 @@ async function main() {
   const xfUrl = env('XF_DATABASE_URL');
   const mm = new pg.Client({ connectionString: env('MM_DATABASE_URL') });
   let xf: mysql.Connection | null = null;
+  let importer: Importer | null = null;
   try {
     xf = await mysql.createConnection({ uri: xfUrl, charset: 'utf8mb4' });
     await mm.connect();
-    await new Importer(xf, mm, mapping, report, options).run(report.dryRun);
+    importer = new Importer(xf, mm, mapping, report, options);
+    await importer.run(report.dryRun);
   } catch (error) {
     report.error = error instanceof Error ? error.message : String(error);
   } finally {
@@ -67,9 +71,10 @@ async function main() {
     await Promise.allSettled([xf?.end(), mm.end()]);
   }
 
-  const files = report.write(process.env.REPORT_DIR || 'reports');
+  const files = report.write(process.env.REPORT_DIR || 'reports', report.error ? [] : [...(importer?.images.values() ?? [])]);
   console.log(report.error ? `\nImport failed: ${report.error}` : report.committed ? '\nImport committed.' : '\nDry run finished, nothing was saved.');
   console.log(`Report: ${files.html}\n        ${files.json}`);
+  if (files.images) console.log(`Images: ${files.images}`);
   if (report.error) process.exitCode = 1;
 }
 

@@ -17,6 +17,14 @@ export interface Resolver {
   threadHref(xfThreadId: number): string | null;
   /** The Munda Manager profile a XenForo user claimed, for a mention link. */
   mention(xfUserId: number): { profileId: string } | null;
+  /** An image attached to an imported post, or null if it isn't one. `src` is null until the bucket's URL is set. */
+  attachment(attachmentId: number): Image | null;
+  /** A public gallery image, or null if the item is private, members-only, not an image or gone. */
+  galleryMedia(mediaId: number): Image | null;
+}
+
+export interface Image {
+  src: string | null;
 }
 
 export interface ConvertStats {
@@ -24,20 +32,24 @@ export interface ConvertStats {
   /** Tags converted with something lost, e.g. [COLOR] keeps its text but not the colour. */
   lossyTags: Record<string, number>;
   attachmentsDropped: number;
+  /** [GALLERY] embeds of albums and of items that aren't public images */
+  galleryDropped: number;
+  /** Attachment and gallery images that point at the image bucket */
+  imagesLinked: number;
   httpImagesLinked: number;
 }
 
 export function emptyStats(): ConvertStats {
-  return { unknownTags: {}, lossyTags: {}, attachmentsDropped: 0, httpImagesLinked: 0 };
+  return { unknownTags: {}, lossyTags: {}, attachmentsDropped: 0, galleryDropped: 0, imagesLinked: 0, httpImagesLinked: 0 };
 }
 
 const KNOWN = new Set([
   'b', 'i', 'u', 's', 'color', 'font', 'size', 'url', 'email', 'img', 'quote', 'code', 'php', 'html',
   'icode', 'plain', 'list', 'left', 'center', 'right', 'justify', 'indent', 'heading', 'spoiler',
-  'ispoiler', 'media', 'attach', 'user', 'hr', 'table', 'tr', 'td', 'th', 'sub', 'sup',
+  'ispoiler', 'media', 'attach', 'gallery', 'user', 'hr', 'table', 'tr', 'td', 'th', 'sub', 'sup',
 ]);
 // Their content is taken as it is, not parsed for more tags
-const RAW = new Set(['code', 'php', 'html', 'icode', 'plain', 'img', 'media', 'attach']);
+const RAW = new Set(['code', 'php', 'html', 'icode', 'plain', 'img', 'media', 'attach', 'gallery']);
 const VOID = new Set(['hr']);
 const BLOCK = new Set([
   'quote', 'code', 'php', 'html', 'list', 'heading', 'spoiler', 'left', 'center', 'right', 'justify',
@@ -51,7 +63,19 @@ const YAKTRIBE_LINK = /^https?:\/\/(?:www\.)?yaktribe\.games\/community\/(thread
 const BARE_URL = /https?:\/\/[^\s<>"[\]]*[^\s<>"[\].,;:!?)']/gi;
 
 function bump(counts: Record<string, number>, key: string) {
-  counts[key] = (counts[key] ?? 0) + 1;
+  // hasOwn: a tag named like an Object method, such as [constructor], must count from 0 too
+  counts[key] = (Object.hasOwn(counts, key) ? counts[key] : 0) + 1;
+}
+
+/** An attachment or gallery image, or a placeholder while the bucket's URL isn't set. */
+export function imageHtml(image: Image, alt = ''): string {
+  return image.src ? `<img src="${escapeHtml(image.src)}" alt="${escapeHtml(alt)}">` : '<em>[image]</em>';
+}
+
+/** The gallery item a [GALLERY=media, 123] embed shows; albums and other options give null. */
+function galleryMediaId(node: TagNode): number | null {
+  const media = /^\s*media\s*,\s*(\d+)\s*$/i.exec(node.option ?? '');
+  return media ? Number(media[1]) : null;
 }
 
 export function escapeHtml(text: string): string {
@@ -139,8 +163,15 @@ function rawText(node: TagNode): string {
   return node.children.map((child) => (child.type === 'text' ? child.text : '')).join('');
 }
 
+export function emptyRefs() {
+  return {
+    postIds: new Set<number>(), threadIds: new Set<number>(), userIds: new Set<number>(),
+    attachmentIds: new Set<number>(), mediaIds: new Set<number>(),
+  };
+}
+
 /** The ids a message refers to, so the import can look them all up for a batch at once. */
-export function collectRefs(nodes: Node[], refs = { postIds: new Set<number>(), threadIds: new Set<number>(), userIds: new Set<number>() }) {
+export function collectRefs(nodes: Node[], refs = emptyRefs()) {
   const addLink = (href: string) => {
     const link = YAKTRIBE_LINK.exec(href);
     if (link) (link[1].toLowerCase() === 'posts' ? refs.postIds : refs.threadIds).add(Number(link[2]));
@@ -157,6 +188,11 @@ export function collectRefs(nodes: Node[], refs = { postIds: new Set<number>(), 
     }
     if (node.name === 'user' && node.option && /^\d+$/.test(node.option)) refs.userIds.add(Number(node.option));
     if (node.name === 'url') addLink(node.option ?? rawText(node));
+    if (node.name === 'attach' && /^\s*\d+\s*$/.test(rawText(node))) refs.attachmentIds.add(Number(rawText(node)));
+    if (node.name === 'gallery') {
+      const mediaId = galleryMediaId(node);
+      if (mediaId) refs.mediaIds.add(mediaId);
+    }
     collectRefs(node.children, refs);
   }
   return refs;
@@ -201,6 +237,11 @@ class Renderer {
       last = index + url.length;
     }
     return html + plain(text.slice(last));
+  }
+
+  private image(image: Image, alt?: string): string {
+    this.stats.imagesLinked++;
+    return imageHtml(image, alt);
   }
 
   private label(node: TagNode): string {
@@ -249,9 +290,19 @@ class Renderer {
         if (!url) bump(this.stats.lossyTags, `media=${site}`);
         return url ? this.link(url, escapeHtml(url)) : escapeHtml(id);
       }
-      case 'attach':
+      case 'attach': {
+        const image = /^\s*\d+\s*$/.test(rawText(node)) ? this.resolver.attachment(Number(rawText(node))) : null;
+        if (image) return this.image(image, node.attrs.alt);
         this.stats.attachmentsDropped++;
         return '<em>[attachment not migrated]</em>';
+      }
+      case 'gallery': {
+        const mediaId = galleryMediaId(node);
+        const image = mediaId ? this.resolver.galleryMedia(mediaId) : null;
+        if (image) return this.image(image);
+        this.stats.galleryDropped++;
+        return '<em>[gallery item not migrated]</em>';
+      }
       case 'user': {
         const profile = node.option && /^\d+$/.test(node.option) ? this.resolver.mention(Number(node.option)) : null;
         const label = rawText(node).replace(/^@/, '');
