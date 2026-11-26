@@ -36,8 +36,8 @@ forum,85,other-tabletop-wargaming-games,Inquisimunda
 forum,87,other-tabletop-wargaming-games,Yak Community Edition
 
 # Prefixes (Necromunda, Bug, Suggestion, Competition and Update are left out)
-prefix,16,,N18
-prefix,7,,N17
+prefix,16,,N23
+prefix,7,,N23
 prefix,3,,NCE
 prefix,1,,Classic Necromunda
 prefix,2,,Classic Necromunda
@@ -75,8 +75,9 @@ tag,kit bash,,Conversion
 tag,conversion,,Conversion
 tag,campaign,,Campaign
 tag,zone mortalis,,Zone Mortalis
-tag,n17,,N17
-tag,necromunda 2017,,N17
+tag,n17,,N23
+tag,n18,,N23
+tag,necromunda 2017,,N23
 tag,nce,,NCE
 tag,mordheim,,Mordheim
 tag,gorkamorka,,GorkaMorka
