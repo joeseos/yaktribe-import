@@ -71,3 +71,5 @@ CREATE TABLE IF NOT EXISTS yaktribe.pending_likes (
   created_at timestamp with time zone NOT NULL,
   PRIMARY KEY (post_id, author_id)
 );
+-- Without it, deleting the previous import's authors scans every pending like once per author
+CREATE INDEX IF NOT EXISTS pending_likes_author_idx ON yaktribe.pending_likes (author_id);
