@@ -97,17 +97,14 @@ const SMILIES: Record<string, string[]> = {
   '🤨': ['o_O', 'O_o', 'o.O', 'O.o'],
 };
 const EMOJI = new Map(Object.entries(SMILIES).flatMap(([emoji, texts]) => texts.map((text) => [text, emoji])));
-// Longest first, so >:( wins over :(. Case matters, as on YakTribe. A smilie that
-// starts or ends with a letter or digit must not touch another one there, so ":Do" stays text.
+// Longest first, so >:( wins over :(. Case matters, and a smilie
+// can't touch a letter or digit, so "great:)" and ":Do" stay text.
 const SMILIE = new RegExp(
-  `(${[...EMOJI.keys()]
+  `(?<![\\p{L}\\p{N}])(${[...EMOJI.keys()]
     .sort((a, b) => b.length - a.length)
-    .map((text) => {
-      const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return `${/^[a-z0-9]/i.test(text) ? '(?<![A-Za-z0-9])' : ''}${escaped}${/[a-z0-9]$/i.test(text) ? '(?![A-Za-z0-9])' : ''}`;
-    })
-    .join('|')})`,
-  'g',
+    .map((text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|')})(?![\\p{L}\\p{N}])`,
+  'gu',
 );
 
 function bump(counts: Record<string, number>, key: string) {
