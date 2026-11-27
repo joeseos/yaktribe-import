@@ -97,13 +97,18 @@ const SMILIES: Record<string, string[]> = {
   '🤨': ['o_O', 'O_o', 'o.O', 'O.o'],
 };
 const EMOJI = new Map(Object.entries(SMILIES).flatMap(([emoji, texts]) => texts.map((text) => [text, emoji])));
-// Longest first, so >:( wins over :(. Case matters, and a smilie
-// can't touch a letter or digit, so "great:)" and ":Do" stay text.
+// Longest first, so >:( wins over :(. Case matters. A smilie may follow a word
+// ("great:)", in 1,572 YakTribe posts), but a letter or digit at its own edge
+// must not touch another, so ":Do" and "hello.Our" stay text.
+const isWordChar = (char: string) => /[\p{L}\p{N}]/u.test(char);
 const SMILIE = new RegExp(
-  `(?<![\\p{L}\\p{N}])(${[...EMOJI.keys()]
+  `(${[...EMOJI.keys()]
     .sort((a, b) => b.length - a.length)
-    .map((text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .join('|')})(?![\\p{L}\\p{N}])`,
+    .map((text) => {
+      const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return `${isWordChar(text[0]) ? '(?<![\\p{L}\\p{N}])' : ''}${escaped}${isWordChar(text.at(-1)!) ? '(?![\\p{L}\\p{N}])' : ''}`;
+    })
+    .join('|')})`,
   'gu',
 );
 

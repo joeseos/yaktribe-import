@@ -125,7 +125,7 @@ test('collectRefs finds quoted posts, mentions, YakTribe links and images', () =
 
 test('smilies become emoji, except in code, [plain] and words', () => {
   assert.equal(html('Thanks! (y) :):):) >:( o_O'), '<p>Thanks! 👍 🙂🙂🙂 😠 🤨</p>');
-  assert.equal(html('great:) :Do ño_O (y)!'), '<p>great:) :Do ño_O 👍!</p>');
+  assert.equal(html('great:) :Do ño_O hello.Our (y)!'), '<p>great🙂 :Do ño_O hello.Our 👍!</p>');
   assert.equal(html('[icode]:)[/icode] [plain]:p[/plain]'), '<p><code>:)</code> :p</p>');
   assert.equal(html('[code]:D[/code]'), '<pre><code>:D</code></pre>');
   assert.equal(html('see https://a.com/x:p ;)'), '<p>see <a href="https://a.com/x:p">https://a.com/x:p</a> 😉</p>');
