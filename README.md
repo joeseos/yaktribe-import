@@ -34,6 +34,7 @@ prefix,1,,Battle Report
 - `forum`: a XenForo `node_id`, the Munda Manager category slug its threads go into, and optional tags. Separate several tags with `;`. A category that doesn't exist yet is created with `category_name`, or a name made from the slug, and the report says so.
 - `tag`: a XenForo tag, and the tags it becomes.
 - `prefix`: a XenForo `prefix_id`, and the tags it becomes.
+- `move`: words separated by `;`, the category slug, and the category slugs it takes threads from. A thread from one of those categories goes into this category instead when one of the words, or its plural, is a whole word in its title or in one of its XenForo tags, in any case. For example `move,battle report;batrep,battle-reports,musings;hive-lore`. The report counts the threads moved.
 
 The report lists the forums, tags and prefixes that aren't in the mapping, so you can see what was left out.
 
