@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
 import type { Client } from 'pg';
 import { collectRefs, emptyRefs, escapeHtml, imageHtml, parse, render, type Image, type Resolver } from './bbcode.ts';
-import type { Mapping } from './mapping.ts';
+import { threadCategory, type Mapping } from './mapping.ts';
 import { Progress } from './progress.ts';
 import type { ImageFile, Report, StepReport } from './report.ts';
 
@@ -34,6 +34,7 @@ interface ThreadInfo {
   path: string;
   nodeId: number;
   prefixId: number;
+  xfTags: string[];
 }
 
 interface Author {
@@ -216,7 +217,7 @@ export class Importer {
   }
 
   private async ensureCategories() {
-    const slugs = [...new Set([...this.mapping.forums.values()].map((forum) => forum.category))];
+    const slugs = [...new Set([...this.mapping.forums.values(), ...this.mapping.moves].map(({ category }) => category))];
     const { rows } = await this.pg.query<{ id: string; slug: string }>(
       'SELECT id, slug FROM forum_categories WHERE slug = ANY($1)',
       [slugs],
@@ -275,6 +276,7 @@ export class Importer {
     }
 
     const progress = new Progress('Threads', total);
+    const moved = new Map<string, number>();
     let lastId = 0;
     while (step.read < total) {
       const batch = await this.xfRows<{
@@ -293,20 +295,32 @@ export class Importer {
         `SELECT nextval(pg_get_serial_sequence('public.forum_threads', 'number')) AS number FROM generate_series(1, $1)`,
         [batch.length],
       );
+      // XenForo tags, read here because a move can depend on them
+      const xfTags = new Map<number, string[]>();
+      const tagRows = await this.xfRows<{ content_id: number; tag: string }>(
+        `SELECT tc.content_id, t.tag FROM ${this.t('tag_content')} tc JOIN ${this.t('tag')} t ON t.tag_id = tc.tag_id
+         WHERE tc.content_type = 'thread' AND tc.content_id IN (?)`,
+        [batch.map((thread) => thread.thread_id)],
+      );
+      for (const { content_id: id, tag } of tagRows) xfTags.set(id, [...(xfTags.get(id) ?? []), tag]);
       const rows = batch.map((thread, i) => {
         const number = Number(numbers[i].number);
-        const forum = this.mapping.forums.get(thread.node_id)!;
-        let title = thread.title.replace(/\s+/g, ' ').trim() || '(untitled)';
-        if (title.length > MAX_TITLE) title = title.slice(0, MAX_TITLE).trim();
+        const fullTitle = thread.title.replace(/\s+/g, ' ').trim() || '(untitled)';
+        const title = fullTitle.length > MAX_TITLE ? fullTitle.slice(0, MAX_TITLE).trim() : fullTitle;
+        const forumCategory = this.mapping.forums.get(thread.node_id)!.category;
+        const tags = xfTags.get(thread.thread_id) ?? [];
+        const category = threadCategory(this.mapping, forumCategory, fullTitle, tags);
+        if (category !== forumCategory) moved.set(category, (moved.get(category) ?? 0) + 1);
         const info: ThreadInfo = {
           id: randomUUID(),
-          path: `/forum/${forum.category}/${number}-${slugify(title)}`,
+          path: `/forum/${category}/${number}-${slugify(title)}`,
           nodeId: thread.node_id,
           prefixId: thread.prefix_id,
+          xfTags: tags,
         };
         this.threads.set(thread.thread_id, info);
         const created = fromUnix(thread.post_date);
-        return [info.id, number, this.categoryIds.get(forum.category), title, thread.sticky === 1, thread.discussion_open === 0, created, created];
+        return [info.id, number, this.categoryIds.get(category), title, thread.sticky === 1, thread.discussion_open === 0, created, created];
       });
       step.written += await insertRows(
         this.pg,
@@ -328,6 +342,9 @@ export class Importer {
       progress.tick(batch.length);
     }
     progress.finish();
+    for (const [category, n] of moved) {
+      this.report.notes.push(`Moved ${n.toLocaleString('en-US')} threads into "${category}" by their title or tags.`);
+    }
   }
 
   /** Numbers every visible post first, so quotes and links can point at posts in any thread. */
@@ -692,26 +709,19 @@ export class Importer {
       for (const tag of tags) set.add(tag);
       tagsByThread.set(threadId, set);
     };
-    for (const threadIds of this.threadChunks()) {
-      const xfTags = await this.xfRows<{ content_id: number; tag: string }>(
-        `SELECT tc.content_id, t.tag FROM ${this.t('tag_content')} tc JOIN ${this.t('tag')} t ON t.tag_id = tc.tag_id
-         WHERE tc.content_type = 'thread' AND tc.content_id IN (?)`,
-        [threadIds],
-      );
-      for (const xfThreadId of threadIds) {
-        const thread = this.threads.get(xfThreadId)!;
-        add(thread.id, this.mapping.forums.get(thread.nodeId)!.tags);
-        if (!thread.prefixId) continue;
+    for (const thread of this.threads.values()) {
+      add(thread.id, this.mapping.forums.get(thread.nodeId)!.tags);
+      if (thread.prefixId) {
         step.read++;
         const mapped = this.mapping.prefixes.get(thread.prefixId);
         const label = `prefix "${prefixNames.get(thread.prefixId) ?? thread.prefixId}" (${thread.prefixId})`;
         if (mapped) add(thread.id, mapped);
         else unmapped.set(label, (unmapped.get(label) ?? 0) + 1);
       }
-      for (const { content_id: xfThreadId, tag } of xfTags) {
+      for (const tag of thread.xfTags) {
         step.read++;
         const mapped = this.mapping.tags.get(tag.toLowerCase());
-        if (mapped) add(this.threads.get(xfThreadId)!.id, mapped);
+        if (mapped) add(thread.id, mapped);
         else unmapped.set(`tag "${tag}"`, (unmapped.get(`tag "${tag}"`) ?? 0) + 1);
       }
     }
