@@ -59,6 +59,8 @@ const LOSSY = new Set(['color', 'font', 'size', 'left', 'center', 'right', 'just
 
 const TAG = /\[(\/?)([a-z]+|\*)(=[^\]]*|\s[^\]]*)?\]/gi;
 const YAKTRIBE_LINK = /^https?:\/\/(?:www\.)?yaktribe\.games\/community\/(threads|posts)\/(?:[^/]*\.)?(\d+)\/?/i;
+// Where the imported threads live, for links that show their own address
+const SITE = 'https://www.mundamanager.com';
 // A URL typed as plain text, without the punctuation that usually follows one
 const BARE_URL = /https?:\/\/[^\s<>"[\]]*[^\s<>"[\].,;:!?)']/gi;
 
@@ -272,9 +274,11 @@ class Renderer {
     return /^(https?:\/\/|mailto:)/i.test(trimmed) ? trimmed : null;
   }
 
-  private link(url: string, label: string): string {
+  /** Without a label the link shows its address: the new one when it goes to an imported thread or post. */
+  private link(url: string, label?: string): string {
     const href = this.href(url);
-    return href ? `<a href="${escapeHtml(href)}">${label}</a>` : label;
+    const text = label ?? escapeHtml(href?.startsWith('/') ? `${SITE}${href}` : url);
+    return href ? `<a href="${escapeHtml(href)}">${text}</a>` : text;
   }
 
   /** [PLAIN] passes smilies: false, as XenForo shows its smilies as typed. */
@@ -289,7 +293,7 @@ class Renderer {
     let html = '';
     let last = 0;
     for (const { 0: url, index } of text.matchAll(BARE_URL)) {
-      html += plain(text.slice(last, index)) + this.link(url, escapeHtml(url));
+      html += plain(text.slice(last, index)) + this.link(url);
       last = index + url.length;
     }
     return html + plain(text.slice(last));
@@ -328,7 +332,7 @@ class Renderer {
       case 'php':
       case 'html': return `<code>${escapeHtml(rawText(node))}</code>`;
       case 'plain': return this.text(rawText(node), false, false);
-      case 'url': return this.link(node.option ?? rawText(node), node.option ? this.label(node) : escapeHtml(rawText(node)));
+      case 'url': return this.link(node.option ?? rawText(node), node.option ? this.label(node) : undefined);
       case 'email': {
         const address = node.option ?? rawText(node);
         return `<a href="mailto:${escapeHtml(address)}">${node.option ? this.label(node) : escapeHtml(address)}</a>`;
@@ -337,14 +341,14 @@ class Renderer {
         const src = rawText(node).trim();
         if (/^https:\/\//i.test(src)) return `<img src="${escapeHtml(src)}" alt="${escapeHtml(node.attrs.alt ?? '')}">`;
         this.stats.httpImagesLinked++;
-        return this.link(src, escapeHtml(src));
+        return this.link(src);
       }
       case 'media': {
         const id = rawText(node).trim();
         const site = (node.option ?? '').toLowerCase();
         const url = site === 'youtube' ? `https://www.youtube.com/watch?v=${id}` : site === 'vimeo' ? `https://vimeo.com/${id}` : null;
         if (!url) bump(this.stats.lossyTags, `media=${site}`);
-        return url ? this.link(url, escapeHtml(url)) : escapeHtml(id);
+        return url ? this.link(url) : escapeHtml(id);
       }
       case 'attach': {
         const image = /^\s*\d+\s*$/.test(rawText(node)) ? this.resolver.attachment(Number(rawText(node))) : null;
