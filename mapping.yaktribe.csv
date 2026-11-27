@@ -36,8 +36,9 @@ forum,85,other-tabletop-wargaming-games,Inquisimunda
 forum,87,other-tabletop-wargaming-games,Yak Community Edition
 
 # Necromunda battle reports, found by title or XenForo tag, into the existing Battle Reports category.
-# Battle reports in the game forums, Tribe News and The Trading Post stay where they are.
-move,battle report;battle-report;battlereport;batrep;bat rep,battle-reports,musings-of-the-yak;yak-mechanicum;tribemeet-and-other-events;miniatures-terrain;rules-mechanics;gangs-loadouts;scenarios-tactics;hive-lore
+# Battle reports in the game forums, Tribe News, The Trading Post and Yak Mechanicum (threads about the
+# YakTribe tools' battle report feature) stay where they are.
+move,battle report;battle-report;battlereport;batrep;bat rep,battle-reports,musings-of-the-yak;tribemeet-and-other-events;miniatures-terrain;rules-mechanics;gangs-loadouts;scenarios-tactics;hive-lore
 
 # Prefixes (Necromunda, Bug, Suggestion and Update are left out)
 prefix,16,,N23
