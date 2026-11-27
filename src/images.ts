@@ -96,15 +96,16 @@ async function main() {
       try {
         const image = await download(url);
         mkdirSync(dirname(target), { recursive: true });
-        // Written beside the target and renamed, so a stopped run leaves no half file
-        await sharp(image, { animated: true })
+        // Written beside the target and renamed, so a stopped run leaves no half file.
+        // failOn 'none': browsers show slightly corrupt JPEGs, so they're kept.
+        await sharp(image, { animated: true, failOn: 'none' })
           .rotate()
           .resize({ width: MAX_SIZE, height: MAX_SIZE, fit: 'inside', withoutEnlargement: true })
           .webp({ quality: 80 })
           .toFile(`${target}.part`);
         renameSync(`${target}.part`, target);
       } catch (error) {
-        failed.push([row.name, url, (error as Error).message].map((value) => `"${value.replace(/"/g, '""')}"`).join(','));
+        failed.push([row.name, url, (error as Error).message.replace(/\s+/g, ' ')].map((value) => `"${value.replace(/"/g, '""')}"`).join(','));
       }
       progress.tick();
     }
