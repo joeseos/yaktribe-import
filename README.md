@@ -11,7 +11,7 @@ Everything runs in one transaction. A failure, or a `--dry-run`, leaves Munda Ma
 | XenForo | Munda Manager |
 | --- | --- |
 | Threads in the forums listed in `mapping.csv` (visible ones that have at least one visible post; redirects are skipped) | `forum_threads` in the mapped category, numbered after the app's own threads in YakTribe's order. `yaktribe.thread_map` keeps the old id, so old thread URLs can redirect |
-| Visible posts, BB code converted to the app's HTML | `forum_posts`, numbered in thread order, with their original dates |
+| Visible posts, BB code converted to the app's HTML, smilies to emoji | `forum_posts`, numbered in thread order, with their original dates |
 | Post authors and Like-givers | `forum_imported_authors`, linked to a Munda Manager profile when the email matches a confirmed account |
 | Likes (reaction 1) | `forum_post_likes` for matched accounts. The rest wait in `yaktribe.pending_likes` until the person claims their YakTribe posts. `like_count` counts both |
 | The forum, its tags and its prefix, through `mapping.csv` | `forum_tags` and `forum_thread_tags` |

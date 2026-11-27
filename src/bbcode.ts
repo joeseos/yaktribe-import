@@ -62,6 +62,56 @@ const YAKTRIBE_LINK = /^https?:\/\/(?:www\.)?yaktribe\.games\/community\/(thread
 // A URL typed as plain text, without the punctuation that usually follows one
 const BARE_URL = /https?:\/\/[^\s<>"[\]]*[^\s<>"[\].,;:!?)']/gi;
 
+// YakTribe's smilies (xf_smilie, 2026-11-27), which XenForo keeps as text and draws as images.
+// Munda Manager shows text as typed, so they become emoji.
+const SMILIES: Record<string, string[]> = {
+  '🦶': [':barefoot:'],
+  '😟': [':cautious:'],
+  '🤬': [':censored:'],
+  '☕': [':coffee:'],
+  '😢': [':cry:'],
+  '🤭': [':giggle:'],
+  '😂': [':LOL:'],
+  '😍': [':love:'],
+  '🙇': [':notworthy:'],
+  '🤣': [':ROFLMAO:'],
+  '🤢': [':sick:'],
+  '😴': [':sleep:'],
+  '🙂': [':)', ':-)', '(:'],
+  '😏': [':sneaky:'],
+  '👎': ['(n)'],
+  '👍': ['(y)'],
+  '🤔': [':unsure:'],
+  '😗': [':whistle:'],
+  '😆': [':X3:'],
+  '😉': [';)'],
+  '🙁': [':('],
+  '😠': [':mad:', '>:(', ':@'],
+  '😕': [':confused:'],
+  '😎': [':cool:', '8-)'],
+  '😛': [':p', ':P', ':-p', ':-P'],
+  '😀': [':D'],
+  '😮': [':eek:', ':o'],
+  '😳': [':oops:'],
+  '🙄': [':rolleyes:'],
+  '🤨': ['o_O', 'O_o', 'o.O', 'O.o'],
+};
+const EMOJI = new Map(Object.entries(SMILIES).flatMap(([emoji, texts]) => texts.map((text) => [text, emoji])));
+// Longest first, so >:( wins over :(. Case matters. A smilie may follow a word
+// ("great:)", in 1,572 YakTribe posts), but a letter or digit at its own edge
+// must not touch another, so ":Do" and "hello.Our" stay text.
+const isWordChar = (char: string) => /[\p{L}\p{N}]/u.test(char);
+const SMILIE = new RegExp(
+  `(${[...EMOJI.keys()]
+    .sort((a, b) => b.length - a.length)
+    .map((text) => {
+      const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return `${isWordChar(text[0]) ? '(?<![\\p{L}\\p{N}])' : ''}${escaped}${isWordChar(text.at(-1)!) ? '(?![\\p{L}\\p{N}])' : ''}`;
+    })
+    .join('|')})`,
+  'gu',
+);
+
 function bump(counts: Record<string, number>, key: string) {
   // hasOwn: a tag named like an Object method, such as [constructor], must count from 0 too
   counts[key] = (Object.hasOwn(counts, key) ? counts[key] : 0) + 1;
@@ -227,8 +277,14 @@ class Renderer {
     return href ? `<a href="${escapeHtml(href)}">${label}</a>` : label;
   }
 
-  private text(text: string, autolink = this.insideLink === 0): string {
-    const plain = (part: string) => escapeHtml(part).replace(/\n/g, '<br>');
+  /** [PLAIN] passes smilies: false, as XenForo shows its smilies as typed. */
+  private text(text: string, autolink = this.insideLink === 0, smilies = true): string {
+    // split() puts the smilies it matched at the odd indexes
+    const plain = (part: string) =>
+      (smilies ? part.split(SMILIE) : [part])
+        .map((piece, index) => (index % 2 ? EMOJI.get(piece) : escapeHtml(piece)))
+        .join('')
+        .replace(/\n/g, '<br>');
     if (!autolink) return plain(text);
     let html = '';
     let last = 0;
@@ -271,7 +327,7 @@ class Renderer {
       case 'code':
       case 'php':
       case 'html': return `<code>${escapeHtml(rawText(node))}</code>`;
-      case 'plain': return this.text(rawText(node), false);
+      case 'plain': return this.text(rawText(node), false, false);
       case 'url': return this.link(node.option ?? rawText(node), node.option ? this.label(node) : escapeHtml(rawText(node)));
       case 'email': {
         const address = node.option ?? rawText(node);
