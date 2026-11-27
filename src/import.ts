@@ -238,7 +238,7 @@ export class Importer {
   private async removePreviousImport() {
     const { rows: [{ count: newPosts }] } = await this.pg.query<{ count: string }>(
       `SELECT count(*) FROM forum_posts p JOIN yaktribe.thread_map m ON m.thread_id = p.thread_id
-       WHERE p.id NOT IN (SELECT post_id FROM yaktribe.post_map)`,
+       WHERE NOT EXISTS (SELECT 1 FROM yaktribe.post_map pm WHERE pm.post_id = p.id)`,
     );
     if (Number(newPosts)) {
       throw new Error(
