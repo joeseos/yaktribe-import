@@ -30,19 +30,27 @@ test('quotes use the app quote shape and link to the imported post', () => {
   assert.equal(html('[quote]x[/quote]'), '<blockquote><p>x</p></blockquote>');
 });
 
-test('links: safe schemes only, YakTribe links rewritten', () => {
+test('links: safe schemes only, YakTribe links rewritten and show their new address', () => {
   assert.equal(html('[url=https://a.com]A[/url]'), '<p><a href="https://a.com">A</a></p>');
   assert.equal(html('[url=javascript:alert(1)]x[/url]'), '<p>x</p>');
   assert.equal(
     html('[url]https://yaktribe.games/community/threads/first-blood.7/[/url]'),
-    '<p><a href="/forum/battle-reports/7-first-blood">https://yaktribe.games/community/threads/first-blood.7/</a></p>',
+    '<p><a href="/forum/battle-reports/7-first-blood">https://www.mundamanager.com/forum/battle-reports/7-first-blood</a></p>',
+  );
+  assert.equal(
+    html('[url=https://yaktribe.games/community/threads/first-blood.7/]First Blood[/url]'),
+    '<p><a href="/forum/battle-reports/7-first-blood">First Blood</a></p>',
+  );
+  assert.equal(
+    html('[url]https://yaktribe.games/community/threads/gone.8/[/url]'),
+    '<p><a href="https://yaktribe.games/community/threads/gone.8/">https://yaktribe.games/community/threads/gone.8/</a></p>',
   );
 });
 
 test('plain URLs become links, but not inside a link or [plain]', () => {
   assert.equal(
     html('See https://a.com/x?a=1&b=2. Or https://yaktribe.games/community/posts/10/'),
-    '<p>See <a href="https://a.com/x?a=1&amp;b=2">https://a.com/x?a=1&amp;b=2</a>. Or <a href="/forum/battle-reports/7-first-blood#post-3">https://yaktribe.games/community/posts/10/</a></p>',
+    '<p>See <a href="https://a.com/x?a=1&amp;b=2">https://a.com/x?a=1&amp;b=2</a>. Or <a href="/forum/battle-reports/7-first-blood#post-3">https://www.mundamanager.com/forum/battle-reports/7-first-blood#post-3</a></p>',
   );
   assert.equal(html('[url=https://a.com]go to https://b.com[/url]'), '<p><a href="https://a.com">go to https://b.com</a></p>');
   assert.equal(html('[plain]https://a.com[/plain]'), '<p>https://a.com</p>');
