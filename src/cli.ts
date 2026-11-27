@@ -62,6 +62,8 @@ async function main() {
   try {
     xf = await mysql.createConnection({ uri: xfUrl, charset: 'utf8mb4' });
     await mm.connect();
+    // Production's database stops any statement after 120 s; the import's bulk statements can take longer
+    await mm.query('SET statement_timeout = 0');
     importer = new Importer(xf, mm, mapping, report, options);
     await importer.run(report.dryRun);
   } catch (error) {
