@@ -58,7 +58,16 @@ const BLOCK = new Set([
 const LOSSY = new Set(['color', 'font', 'size', 'left', 'center', 'right', 'justify', 'indent', 'table', 'sub', 'sup', 'ispoiler']);
 
 const TAG = /\[(\/?)([a-z]+|\*)(=[^\]]*|\s[^\]]*)?\]/gi;
-const YAKTRIBE_LINK = /^https?:\/\/(?:www\.)?yaktribe\.games\/community\/(threads|posts)\/(?:[^/]*\.)?(\d+)\/?/i;
+// A thread link can point at one of its posts: …/threads/title.12/post-345, …/#post-345 or …/page-3#post-345
+const YAKTRIBE_LINK =
+  /^https?:\/\/(?:www\.)?yaktribe\.games\/community\/(threads|posts)\/(?:[^/?#]*\.)?(\d+)\/?(?:(?:page-\d+)?[/#]?post-(\d+))?/i;
+
+/** The YakTribe thread or post a link goes to */
+function yaktribeTarget(url: string): { post: boolean; id: number } | null {
+  const link = YAKTRIBE_LINK.exec(url);
+  if (!link) return null;
+  return link[3] ? { post: true, id: Number(link[3]) } : { post: link[1].toLowerCase() === 'posts', id: Number(link[2]) };
+}
 // Where the imported threads live, for links that show their own address
 const SITE = 'https://www.mundamanager.com';
 // A URL typed as plain text, without the punctuation that usually follows one
@@ -225,8 +234,8 @@ export function emptyRefs() {
 /** The ids a message refers to, so the import can look them all up for a batch at once. */
 export function collectRefs(nodes: Node[], refs = emptyRefs()) {
   const addLink = (href: string) => {
-    const link = YAKTRIBE_LINK.exec(href);
-    if (link) (link[1].toLowerCase() === 'posts' ? refs.postIds : refs.threadIds).add(Number(link[2]));
+    const target = yaktribeTarget(href);
+    if (target) (target.post ? refs.postIds : refs.threadIds).add(target.id);
   };
   for (const node of nodes) {
     if (node.type === 'text') {
@@ -263,10 +272,9 @@ class Renderer {
 
   private href(url: string): string | null {
     const trimmed = url.trim();
-    const link = YAKTRIBE_LINK.exec(trimmed);
-    if (link) {
-      const id = Number(link[2]);
-      const moved = link[1].toLowerCase() === 'posts' ? this.resolver.postHref(id) : this.resolver.threadHref(id);
+    const target = yaktribeTarget(trimmed);
+    if (target) {
+      const moved = target.post ? this.resolver.postHref(target.id) : this.resolver.threadHref(target.id);
       if (moved) return moved;
     }
     if (/^\/community\//.test(trimmed)) return `https://yaktribe.games${trimmed}`;

@@ -41,6 +41,16 @@ test('links: safe schemes only, YakTribe links rewritten and show their new addr
     html('[url=https://yaktribe.games/community/threads/first-blood.7/]First Blood[/url]'),
     '<p><a href="/forum/battle-reports/7-first-blood">First Blood</a></p>',
   );
+  for (const url of [
+    'https://yaktribe.games/community/threads/first-blood.7/post-10',
+    'https://yaktribe.games/community/threads/first-blood.7/#post-10',
+    'https://yaktribe.games/community/threads/first-blood.7/page-2#post-10',
+  ]) {
+    assert.equal(
+      html(`[url=${url}]that post[/url]`),
+      '<p><a href="/forum/battle-reports/7-first-blood#post-3">that post</a></p>',
+    );
+  }
   assert.equal(
     html('[url]https://yaktribe.games/community/threads/gone.8/[/url]'),
     '<p><a href="https://yaktribe.games/community/threads/gone.8/">https://yaktribe.games/community/threads/gone.8/</a></p>',
@@ -123,11 +133,11 @@ test('an unclosed raw tag stays as text', () => {
 
 test('collectRefs finds quoted posts, mentions, YakTribe links and images', () => {
   const refs = collectRefs(
-    parse('[quote="A, post: 10"]x[/quote][user=45]@K[/user] https://yaktribe.games/community/posts/99/ [url=https://yaktribe.games/community/threads/x.7/]t[/url] [ATTACH]5[/ATTACH] [GALLERY=media, 12][/GALLERY] [GALLERY=album, 3][/GALLERY]', emptyStats()),
+    parse('[quote="A, post: 10"]x[/quote][user=45]@K[/user] https://yaktribe.games/community/posts/99/ [url=https://yaktribe.games/community/threads/x.7/]t[/url] https://yaktribe.games/community/threads/x.7/post-150 [ATTACH]5[/ATTACH] [GALLERY=media, 12][/GALLERY] [GALLERY=album, 3][/GALLERY]', emptyStats()),
   );
   assert.deepEqual([...refs.attachmentIds], [5]);
   assert.deepEqual([...refs.mediaIds], [12]);
-  assert.deepEqual([...refs.postIds].sort(), [10, 99]);
+  assert.deepEqual([...refs.postIds].sort((a, b) => a - b), [10, 99, 150]);
   assert.deepEqual([...refs.threadIds], [7]);
   assert.deepEqual([...refs.userIds], [45]);
 });
