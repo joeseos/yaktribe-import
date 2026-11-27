@@ -54,12 +54,13 @@ test('plain URLs become links, but not inside a link or [plain]', () => {
   );
   assert.equal(html('[url=https://a.com]go to https://b.com[/url]'), '<p><a href="https://a.com">go to https://b.com</a></p>');
   assert.equal(html('[plain]https://a.com[/plain]'), '<p>https://a.com</p>');
+  assert.equal(html('http://bit.ly/Uhy8kB'), '<p><a href="https://bit.ly/Uhy8kB">http://bit.ly/Uhy8kB</a></p>');
 });
 
 test('images: https kept, http becomes a link', () => {
   const stats = emptyStats();
   assert.equal(html('[IMG]https://i.imgur.com/a.png[/IMG]', stats), '<p><img src="https://i.imgur.com/a.png" alt=""></p>');
-  assert.equal(html('[img]http://x.com/a.png[/img]', stats), '<p><a href="http://x.com/a.png">http://x.com/a.png</a></p>');
+  assert.equal(html('[img]http://x.com/a.png[/img]', stats), '<p><a href="https://x.com/a.png">http://x.com/a.png</a></p>');
   assert.equal(stats.httpImagesLinked, 1);
 });
 

@@ -271,7 +271,9 @@ class Renderer {
     }
     if (/^\/community\//.test(trimmed)) return `https://yaktribe.games${trimmed}`;
     if (/^www\./i.test(trimmed)) return `https://${trimmed}`;
-    return /^(https?:\/\/|mailto:)/i.test(trimmed) ? trimmed : null;
+    // Munda Manager keeps only https links; nearly every site that answered http in 2013 answers https now
+    if (/^http:\/\//i.test(trimmed)) return `https://${trimmed.slice(7)}`;
+    return /^(https:\/\/|mailto:)/i.test(trimmed) ? trimmed : null;
   }
 
   /** Without a label the link shows its address: the new one when it goes to an imported thread or post. */
