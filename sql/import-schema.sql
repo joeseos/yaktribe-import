@@ -39,10 +39,6 @@ BEGIN
   END LOOP;
 END $$;
 
--- Without these, deleting the previous import's authors scans every post and pending like once per author
-CREATE INDEX IF NOT EXISTS forum_threads_imported_author_id_idx ON public.forum_threads (imported_author_id);
-CREATE INDEX IF NOT EXISTS forum_posts_imported_author_id_idx ON public.forum_posts (imported_author_id);
-
 CREATE SCHEMA IF NOT EXISTS yaktribe;
 REVOKE ALL ON SCHEMA yaktribe FROM PUBLIC;
 
@@ -75,4 +71,5 @@ CREATE TABLE IF NOT EXISTS yaktribe.pending_likes (
   created_at timestamp with time zone NOT NULL,
   PRIMARY KEY (post_id, author_id)
 );
+-- Without it, deleting the previous import's authors scans every pending like once per author
 CREATE INDEX IF NOT EXISTS pending_likes_author_idx ON yaktribe.pending_likes (author_id);
